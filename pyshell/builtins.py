@@ -43,6 +43,44 @@ BUILTIN_HELP["true"] = "Do nothing; exit with code 0."
 BUILTIN_HELP["false"] = "Do nothing; exit with code 1."
 BUILTIN_HELP["mkdir"] = "Create directory. mkdir [-p] path... (creates parents with -p)."
 
+# Extended help for documentation topics (help('prompt'), help('quoting'), help('windows'))
+EXTENDED_HELP: dict[str, str] = {
+    "prompt": """Prompt placeholders (use in prompt("...") or the prompt command):
+
+  {cwd}      Full path of current directory
+  {base}     Last component of current directory (e.g. project name)
+  {user}     Username (USER or USERNAME env)
+  {hostname} Machine hostname
+  {time}     Current time (HH:MM:SS)
+  {exit}     Last command exit code
+  {jobs}     Number of background jobs
+
+Examples:
+  prompt("{base} $ ")
+  prompt("[{user}@{hostname} {base}] $ ")
+  prompt("[{time}] {cwd} >>> ")
+  prompt()   restores the default ([{base}] >>> )""",
+    "quoting": """Quoting and expansion in command lines:
+
+  • Double and single quotes group words into one argument; backslash (\\)
+    escapes the next character (including newline for line continuation).
+  • After splitting, $VAR and ${VAR} are expanded in each argument from the
+    environment; ~ and ~user expand to home directories.
+  • Redirect paths and here-strings (<<<) also get $VAR and ~ expansion.
+  • Use quotes to include spaces or to protect $ and ~ when you want them
+    passed literally (e.g. in Python strings use '...' or escape as needed).""",
+    "windows": """Windows vs Unix:
+
+  • Line editing: On Unix, readline is used when available (full line editing,
+    history, completion). On Windows, if readline is not installed, pyshell
+    uses a key-by-key fallback with history (Up/Down), cursor movement
+    (Left/Right, Home/End), Ctrl+A/Ctrl+E, and tab completion.
+  • History: Command history is saved to ~/.pyshell_history on exit and loaded
+    at startup (same path on Windows: your user profile directory).
+  • Commands: On Windows, ls, dir, cat, and echo are built in when not on PATH.
+    On Unix they are run from PATH. mkdir -p is built in on all platforms.""",
+}
+
 
 def run_mkdir(argv: list[str]) -> bool:
     """Built-in mkdir with -p/--parents: create directories. Returns True if all succeeded."""
@@ -268,15 +306,19 @@ def make_builtins(
             set_prompt(s)
 
     def help(topic: str = "") -> str:
-        """Show help for builtins. help() or help('cd')."""
+        """Show help for builtins. help() or help('cd'). Extended: help('prompt'), help('quoting'), help('windows')."""
         if not topic:
             lines = ["Builtins (use help('name') for details):"]
             for name in sorted(BUILTIN_HELP.keys()):
                 lines.append(f"  {name:<12} {BUILTIN_HELP[name]}")
             lines.append("")
+            lines.append("Extended docs: help('prompt'), help('quoting'), help('windows')")
+            lines.append("")
             lines.append("Python: assignments, expressions, print(), etc. shell.run(cmd), shell.capture(cmd), shell.cd/pwd/pushd/popd/dirs.")
             lines.append("External commands: type name and args.")
             return "\n".join(lines)
+        if topic in EXTENDED_HELP:
+            return EXTENDED_HELP[topic].strip()
         if topic in BUILTIN_HELP:
             fn = {"cd": cd, "pwd": pwd, "exit": exit, "env": env, "run": run, "run_capture": run_capture, "history": history, "alias": alias, "unalias": unalias, "prompt": prompt, "help": help}.get(topic)
             return (fn.__doc__ or BUILTIN_HELP[topic]).strip()
@@ -324,12 +366,15 @@ def run_builtin_command(name: str, args: list[str]) -> str | int | None:
 
     if name == "help":
         if not args:
-            for name in sorted(BUILTIN_HELP.keys()):
-                print(f"  {name:<12} {BUILTIN_HELP[name]}")
-            print("\nUse help(name) for details. Python: expressions, print(), etc. Commands: name and args.")
+            for bname in sorted(BUILTIN_HELP.keys()):
+                print(f"  {bname:<12} {BUILTIN_HELP[bname]}")
+            print("\nExtended docs: help prompt, help quoting, help windows")
+            print("Use help(name) for details. Python: expressions, print(), etc. Commands: name and args.")
         else:
             topic = args[0]
-            if topic in BUILTIN_HELP:
+            if topic in EXTENDED_HELP:
+                print(EXTENDED_HELP[topic])
+            elif topic in BUILTIN_HELP:
                 print(BUILTIN_HELP[topic])
             else:
                 print(f"Unknown builtin: {topic!r}", file=sys.stderr)

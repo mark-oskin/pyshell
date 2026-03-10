@@ -101,6 +101,8 @@ def has_unquoted_redirect_or_background(line: str) -> bool:
             return True
         if c == "<" and (i + 1 >= n or line[i + 1] in (" ", "\t")):
             return True
+        if c == "<" and i + 2 < n and line[i : i + 3] == "<<<":
+            return True
         if c == "2" and i + 2 <= n and line[i + 1] == ">" and (line[i + 2] in (" ", "\t", "&") or i + 2 == n):
             return True
         i += 1
@@ -257,6 +259,10 @@ def parse_redirects(line: str) -> tuple[list[str], list[tuple[str, str | None]],
                 redirects.append(("2>>", tokens[i + 2]))
                 i += 3
                 continue
+        if t == "<<<" and i + 1 < len(tokens):
+            redirects.append(("<<<", tokens[i + 1]))
+            i += 2
+            continue
         if t in (">", ">>", "<") and i + 1 < len(tokens):
             redirects.append((t, tokens[i + 1]))
             i += 2

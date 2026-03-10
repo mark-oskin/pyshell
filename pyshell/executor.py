@@ -577,6 +577,16 @@ def _apply_redirects(redirects: Redirects) -> tuple[Any, Any, Any, bool]:
             stdout_f = open(path, "w", encoding="utf-8")
         elif op == ">>":
             stdout_f = open(path, "a", encoding="utf-8")
+        elif op == "<<<":
+            # Here-string: feed string as stdin (path is the content; add newline like bash)
+            rfd, wfd = os.pipe()
+            try:
+                with open(wfd, "w", encoding="utf-8") as w:
+                    w.write((path or "") + "\n")
+            except Exception:
+                os.close(rfd)
+                raise
+            stdin_f = open(rfd, "r", encoding="utf-8")
         elif op == "<":
             stdin_f = open(path, "r", encoding="utf-8")
         elif op == "2>":

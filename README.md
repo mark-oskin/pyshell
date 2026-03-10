@@ -12,11 +12,11 @@ A command-line shell written in Python with **Python-like syntax**. Use Python e
 - **true / false**: Built-in no-ops that set exit code 0 or 1 (e.g. for `false || echo failed`).
 - **mkdir -p**: Built-in `mkdir` supports `-p` / `--parents` to create parent directories on all platforms.
 - **Aliases**: `alias ll='ls -la'` then type `ll`; `unalias ll` to remove. Use `alias` with no args to list.
-- **Redirects**: `> file`, `>> file`, `< file`, `2> err`, `2>> err`, `2>&1` (e.g. `echo hi > out.txt`).
+- **Redirects**: `> file`, `>> file`, `< file`, `<<< string` (here-string), `2> err`, `2>> err`, `2>&1` (e.g. `echo hi > out.txt`, `cat <<< "hello"`).
 - **Background jobs**: End a command with `&` to run in background; `jobs` to list, `fg` to bring last job to foreground.
-- **Custom prompt**: `prompt(">>> ")` or `prompt("{base} $ ")`; use `{cwd}` and `{base}` for the current directory.
+- **Custom prompt**: `prompt(">>> ")` or `prompt("{base} $ ")`; placeholders: `{cwd}`, `{base}`, `{user}`, `{hostname}`, `{time}`, `{exit}`, `{jobs}` (see [Prompt placeholders](#prompt-placeholders)).
 - **Tab completion**: Commands (builtins + PATH), filenames, and variables (when readline is available).
-- **Pipelines**: `cmd1 | cmd2` (e.g. `pwd | cat`). **History** and **last exit code** (`last_exit_code`). **Scripts**: `pyshell script.psh`.
+- **Pipelines**: `cmd1 | cmd2` (e.g. `pwd | cat`). **History** (persistent in `~/.pyshell_history`) and **last exit code** (`last_exit_code`). **Scripts**: `pyshell script.psh`.
 - **Startup config**: Put commands or Python in `~/.pyshellrc` or `./.pyshellrc`; they run automatically when the REPL starts.
 - **Glob expansion**: Command arguments like `*.py` or `src/**/*.py` are expanded to matching paths.
 - **~ expansion**: `~` and `~user` in command arguments expand to home directories (e.g. `cd ~`, `cat ~/.pyshellrc`).
@@ -165,7 +165,37 @@ pyshell $
 [/home/you/projects] >>>
 >>> prompt()
 ```
-Use `{cwd}` for the full current path and `{base}` for its last component. Call `prompt()` with no arguments to restore the default.
+
+Call `prompt()` with no arguments to restore the default. In the shell: `help prompt` or `help('prompt')` for full details.
+
+#### Prompt placeholders
+
+| Placeholder  | Description |
+|-------------|-------------|
+| `{cwd}`     | Full path of current directory |
+| `{base}`    | Last component of current directory (e.g. project name) |
+| `{user}`    | Username (`USER` or `USERNAME` env) |
+| `{hostname}`| Machine hostname |
+| `{time}`    | Current time (HH:MM:SS) |
+| `{exit}`    | Last command exit code |
+| `{jobs}`    | Number of background jobs |
+
+Examples: `prompt("{user}@{hostname} {base} $ ")`, `prompt("[{time}] >>> ")`.
+
+### Quoting
+
+- **Double and single quotes** group words into one argument; use them to include spaces or special characters in a command argument.
+- **Backslash** (`\`) escapes the next character (including newline for line continuation).
+- **Expansion**: After splitting the line, `$VAR` and `${VAR}` are replaced from the environment, and `~` / `~user` expand to home directories. This applies to command arguments and to redirect paths (including here-strings).
+- In the shell, run `help quoting` or `help('quoting')` for a short reference.
+
+### Windows vs Unix
+
+- **Line editing**: On Unix, pyshell uses **readline** when available (full line editing, history keys, completion). On Windows, if readline is not installed, a key-by-key **fallback** is used: Up/Down for history, Left/Right and Home/End for cursor movement, Ctrl+A / Ctrl+E for start/end of line, and Tab for completion.
+- **History**: Command history is saved to `~/.pyshell_history` on exit and loaded at startup (on Windows, `~` is your user profile directory). The last 2000 entries are kept.
+- **Commands**: On Windows, `ls`, `dir`, `cat`, and `echo` are built in when not on PATH. On Unix they are run from PATH. `mkdir -p` is built in on all platforms.
+
+Run `help windows` or `help('windows')` in the shell for a short summary.
 
 ### Builtins and variables for scripts
 

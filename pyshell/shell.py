@@ -128,10 +128,12 @@ def _print_usage() -> None:
     print("  Start an interactive shell, or run a script if SCRIPT is given.")
     print()
     print("Options:")
-    print("  -c CMD       Run CMD and exit (single command)")
-    print("  -h, --help   Show this message and exit")
-    print("  --no-rc      Do not load .pyshellrc on startup")
+    print("  -c CMD         Run CMD and exit (single command)")
+    print("  -h, --help     Show this message and exit")
+    print("  --no-rc        Do not load .pyshellrc on startup")
     print("  -v, --version  Print version and exit")
+    print()
+    print("  In the shell: help for builtins; help prompt, help quoting, help windows for docs.")
 
 
 def run_script(path: str) -> int:
@@ -199,29 +201,33 @@ class Shell:
         if run_rc:
             self._run_startup_config()
         self._print_banner()
+        self._load_history()
         exit_code = 0
-        while self._running:
-            try:
-                line = self._read_line()
-                if line is None:
+        try:
+            while self._running:
+                try:
+                    line = self._read_line()
+                    if line is None:
+                        break
+                    line = line.strip()
+                    if not line:
+                        continue
+                    self._add_history(line)
+                    result = self._eval(line)
+                    if result is not None and result != "":
+                        print(result)
+                except EOFError:
                     break
-                line = line.strip()
-                if not line:
+                except KeyboardInterrupt:
+                    print()
                     continue
-                self._add_history(line)
-                result = self._eval(line)
-                if result is not None and result != "":
-                    print(result)
-            except EOFError:
-                break
-            except KeyboardInterrupt:
-                print()
-                continue
-            except SystemExit as e:
-                exit_code = e.code if isinstance(e.code, int) else 0
-                break
-            except Exception as e:
-                print(f"Error: {e}", file=sys.stderr)
+                except SystemExit as e:
+                    exit_code = e.code if isinstance(e.code, int) else 0
+                    break
+                except Exception as e:
+                    print(f"Error: {e}", file=sys.stderr)
+        finally:
+            self._save_history()
         return exit_code
 
     def _run_file_in_current_shell(self, path: str) -> None:
@@ -319,6 +325,55 @@ class Shell:
                 readline.add_history(line)
             except Exception:
                 pass
+
+    _HISTORY_FILENAME = ".pyshell_history"
+    _HISTORY_MAX_ENTRIES = 2000
+
+    def _history_file_path(self) -> str:
+        """Path to the persistent history file (e.g. ~/.pyshell_history)."""
+        return os.path.join(os.path.expanduser("~"), self._HISTORY_FILENAME)
+
+    def _load_history(self) -> None:
+        """Load history from file into _history and readline (if available)."""
+        path = self._history_file_path()
+        try:
+            with open(path, encoding="utf-8") as f:
+                raw_lines = f.readlines()
+        except OSError:
+            return
+        for raw in raw_lines:
+            line = raw.rstrip("\n")
+            # Unescape: \\ -> \, \\n -> newline, \\r -> carriage return
+            line = line.replace("\\\\", "\x00").replace("\\n", "\n").replace("\\r", "\r").replace("\x00", "\\")
+            if not line:
+                continue
+            self._history.append(line)
+            if readline is not None:
+                try:
+                    readline.add_history(line)
+                except Exception:
+                    pass
+        if len(self._history) > self._HISTORY_MAX_ENTRIES:
+            self._history = self._history[-self._HISTORY_MAX_ENTRIES :]
+            if readline is not None:
+                try:
+                    readline.clear_history()
+                    for h in self._history:
+                        readline.add_history(h)
+                except Exception:
+                    pass
+
+    def _save_history(self) -> None:
+        """Write _history to file (last _HISTORY_MAX_ENTRIES), for persistence."""
+        path = self._history_file_path()
+        entries = self._history[-self._HISTORY_MAX_ENTRIES :]
+        try:
+            with open(path, "w", encoding="utf-8") as f:
+                for line in entries:
+                    escaped = line.replace("\\", "\\\\").replace("\n", "\\n").replace("\r", "\\r")
+                    f.write(escaped + "\n")
+        except OSError:
+            pass
 
     def _setup_completion(self) -> None:
         """Register tab completer with readline."""
@@ -573,6 +628,7 @@ class Shell:
         sys.stdout.write(prompt)
         sys.stdout.flush()
         line = ""
+        pos = 0  # cursor index in line (0..len(line))
         history = self._history
         history_index = len(history)  # beyond last = "current line" being edited
         current_edit = ""  # line being typed before we started navigating history
@@ -586,6 +642,18 @@ class Shell:
                 raise KeyboardInterrupt
             if ch == "\x1a":  # Ctrl+Z (EOF on Windows)
                 raise EOFError
+            if ch == "\x01":  # Ctrl+A: beginning of line
+                if pos > 0:
+                    sys.stdout.write("\b" * pos)
+                    sys.stdout.flush()
+                    pos = 0
+                continue
+            if ch == "\x05":  # Ctrl+E: end of line
+                if pos < len(line):
+                    sys.stdout.write(line[pos:])
+                    sys.stdout.flush()
+                    pos = len(line)
+                continue
             if ch in ("\x00", "\xe0"):  # special key prefix, then scan code
                 scan = msvcrt.getwch()
                 if ch == "\xe0" and scan in ("H", "P"):  # Up=72, Down=80
@@ -595,6 +663,7 @@ class Shell:
                                 current_edit = line
                             history_index = max(0, history_index - 1)
                             line = history[history_index]
+                            pos = len(line)
                             n = len(prompt) + max(len(line), 80)
                             sys.stdout.write("\r" + " " * n + "\r" + prompt + line)
                             sys.stdout.flush()
@@ -605,14 +674,38 @@ class Shell:
                                 line = current_edit
                             else:
                                 line = history[history_index]
+                            pos = len(line)
                             n = len(prompt) + max(len(line), 80)
                             sys.stdout.write("\r" + " " * n + "\r" + prompt + line)
                             sys.stdout.flush()
+                elif ch == "\xe0" and scan == "K":  # Left
+                    if pos > 0:
+                        pos -= 1
+                        sys.stdout.write("\b")
+                        sys.stdout.flush()
+                elif ch == "\xe0" and scan == "M":  # Right
+                    if pos < len(line):
+                        sys.stdout.write(line[pos])
+                        pos += 1
+                        sys.stdout.flush()
+                elif ch == "\xe0" and scan == "G":  # Home
+                    if pos > 0:
+                        sys.stdout.write("\b" * pos)
+                        sys.stdout.flush()
+                        pos = 0
+                elif ch == "\xe0" and scan == "O":  # End
+                    if pos < len(line):
+                        sys.stdout.write(line[pos:])
+                        sys.stdout.flush()
+                        pos = len(line)
                 continue
             if ch == "\b" or ch == "\x7f":  # backspace
-                if line:
-                    line = line[:-1]
-                    sys.stdout.write("\b \b")
+                if pos > 0:
+                    line = line[: pos - 1] + line[pos:]
+                    pos -= 1
+                    sys.stdout.write("\b")
+                    sys.stdout.write(line[pos:] + " ")
+                    sys.stdout.write("\b" * (len(line) - pos + 1))
                     sys.stdout.flush()
                 continue
             if ch == "\t":  # Tab: complete
@@ -639,16 +732,25 @@ class Shell:
                         sys.stdout.write("\n")
                         sys.stdout.write(prompt + line)
                         sys.stdout.flush()
+                        pos = len(line)
                         continue
-                # redraw line after single or common-prefix completion
+                pos = len(line)
                 n = len(prompt) + len(line)
                 sys.stdout.write("\r" + " " * n + "\r" + prompt + line)
                 sys.stdout.flush()
                 continue
-            # Typing: stay in "current line" for next Up/Down
+            # Typing: insert at cursor
             history_index = len(history)
-            line += ch
-            sys.stdout.write(ch)
+            if pos < len(line):
+                line = line[:pos] + ch + line[pos:]
+                pos += 1
+                sys.stdout.write(ch)
+                sys.stdout.write(line[pos:])
+                sys.stdout.write("\b" * (len(line) - pos))
+            else:
+                line += ch
+                pos += 1
+                sys.stdout.write(ch)
             sys.stdout.flush()
 
     def _read_line(self) -> str | None:
