@@ -563,16 +563,19 @@ class Shell:
         self.executor._set_exit_code(proc.returncode if proc.returncode is not None else 0)
 
     def _read_line_fallback(self, prompt: str) -> str | None:
-        """Read one line with tab completion when readline is not available (e.g. Windows)."""
+        """Read one line with tab completion and history when readline is not available (e.g. Windows)."""
         if msvcrt is None:
             try:
                 return input(prompt)
             except EOFError:
                 return None
-        # Windows: key-by-key with msvcrt, our own completion
+        # Windows: key-by-key with msvcrt, our own completion and history (Up/Down)
         sys.stdout.write(prompt)
         sys.stdout.flush()
         line = ""
+        history = self._history
+        history_index = len(history)  # beyond last = "current line" being edited
+        current_edit = ""  # line being typed before we started navigating history
         while True:
             ch = msvcrt.getwch()
             if ch in ("\r", "\n"):
@@ -583,8 +586,28 @@ class Shell:
                 raise KeyboardInterrupt
             if ch == "\x1a":  # Ctrl+Z (EOF on Windows)
                 raise EOFError
-            if ch in ("\x00", "\xe0"):  # special key prefix, consume scan code
-                msvcrt.getwch()
+            if ch in ("\x00", "\xe0"):  # special key prefix, then scan code
+                scan = msvcrt.getwch()
+                if ch == "\xe0" and scan in ("H", "P"):  # Up=72, Down=80
+                    if scan == "H":  # Up: previous history
+                        if history:
+                            if history_index >= len(history):
+                                current_edit = line
+                            history_index = max(0, history_index - 1)
+                            line = history[history_index]
+                            n = len(prompt) + max(len(line), 80)
+                            sys.stdout.write("\r" + " " * n + "\r" + prompt + line)
+                            sys.stdout.flush()
+                    else:  # Down: next history
+                        if history:
+                            history_index = min(len(history), history_index + 1)
+                            if history_index >= len(history):
+                                line = current_edit
+                            else:
+                                line = history[history_index]
+                            n = len(prompt) + max(len(line), 80)
+                            sys.stdout.write("\r" + " " * n + "\r" + prompt + line)
+                            sys.stdout.flush()
                 continue
             if ch == "\b" or ch == "\x7f":  # backspace
                 if line:
@@ -622,6 +645,8 @@ class Shell:
                 sys.stdout.write("\r" + " " * n + "\r" + prompt + line)
                 sys.stdout.flush()
                 continue
+            # Typing: stay in "current line" for next Up/Down
+            history_index = len(history)
             line += ch
             sys.stdout.write(ch)
             sys.stdout.flush()
