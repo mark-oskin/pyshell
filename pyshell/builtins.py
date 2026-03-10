@@ -3,6 +3,7 @@
 import os
 import subprocess
 import sys
+from datetime import datetime
 from typing import TYPE_CHECKING, Any, Callable
 
 if TYPE_CHECKING:
@@ -31,6 +32,106 @@ BUILTIN_HELP: dict[str, str] = {
     "unalias": "Remove an alias. unalias name",
     "which": "Print path or builtin/alias for a command. which name [...]",
 }
+# Windows-only: ls and dir (Unix uses external ls)
+if os.name == "nt":
+    BUILTIN_HELP["dir"] = "List directory contents. dir [path...] [-l] [-a] (Windows builtin)."
+    BUILTIN_HELP["ls"] = "List directory contents. ls [path...] [-l] [-a] (Windows builtin)."
+
+
+def run_ls_dir(argv: list[str]) -> str:
+    """
+    Built-in ls/dir for Windows: list directory contents like Unix ls.
+    Supports -l (long), -a/--all (include dotfiles), -1 (one per line).
+    argv[0] is the command name (ls or dir); parse argv[1:] for paths and flags.
+    Returns the formatted output string.
+    """
+    paths: list[str] = []
+    long_fmt = False
+    show_all = False
+    one_per_line = False
+    args = argv[1:] if len(argv) > 1 else []
+    i = 0
+    while i < len(args):
+        a = args[i]
+        if a.startswith("-"):
+            for c in a[1:]:
+                if c == "l":
+                    long_fmt = True
+                elif c == "a":
+                    show_all = True
+                elif c == "1":
+                    one_per_line = True
+            if a in ("--all", "-all"):
+                show_all = True
+            i += 1
+        else:
+            paths.append(a)
+            i += 1
+    if not paths:
+        paths = ["."]
+    lines: list[str] = []
+    for path in paths:
+        path = os.path.expanduser(path)
+        if not os.path.exists(path):
+            lines.append(f"ls: {path}: No such file or directory")
+            continue
+        if os.path.isfile(path):
+            if long_fmt:
+                st = os.stat(path)
+                mtime = datetime.fromtimestamp(st.st_mtime).strftime("%Y-%m-%d %H:%M")
+                size = st.st_size
+                lines.append(f"{size:>12}  {mtime}  {path}")
+            else:
+                lines.append(path)
+            continue
+        # Directory
+        try:
+            entries = []
+            with os.scandir(path) as it:
+                for e in it:
+                    if not show_all and e.name.startswith("."):
+                        continue
+                    entries.append(e)
+        except OSError as err:
+            lines.append(f"ls: {path}: {err}")
+            continue
+        # Sort: directories first, then by name
+        def sort_key(ent: os.DirEntry) -> tuple[int, str]:
+            return (0 if ent.is_dir() else 1, ent.name.lower())
+        entries.sort(key=sort_key)
+        if path != "." and (len(paths) > 1 or long_fmt):
+            lines.append(f"{path}:")
+        if long_fmt or one_per_line:
+            for e in entries:
+                try:
+                    st = e.stat()
+                except OSError:
+                    st = None
+                if long_fmt and st is not None:
+                    mtime = datetime.fromtimestamp(st.st_mtime).strftime("%Y-%m-%d %H:%M")
+                    size = st.st_size if e.is_file() else 0
+                    kind = "d" if e.is_dir() else "-"
+                    lines.append(f"{kind} {size:>12}  {mtime}  {e.name}")
+                else:
+                    lines.append(e.name)
+        else:
+            # Columnar: fit names in ~80 cols (or 4 columns min)
+            names = [e.name for e in entries]
+            col_width = max(len(n) for n in names) + 2 if names else 0
+            try:
+                term_width = os.get_terminal_size().columns
+            except OSError:
+                term_width = 80
+            ncols = max(1, term_width // col_width) if col_width else 1
+            row = []
+            for i, n in enumerate(names):
+                row.append(n.ljust(col_width))
+                if (i + 1) % ncols == 0 or i == len(names) - 1:
+                    lines.append("".join(row).rstrip())
+                    row = []
+        if path != "." and len(paths) > 1 and entries:
+            lines.append("")
+    return "\n".join(lines)
 
 
 def make_builtins(

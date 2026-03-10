@@ -312,6 +312,8 @@ class Shell:
                             completions.append("$" + k)
             else:
                 builtins = ["cd", "pwd", "exit", "env", "run", "run_capture", "history", "alias", "unalias", "prompt", "help", "jobs", "fg", "bg", "pushd", "popd", "dirs", "type", "which", "source"]
+                if os.name == "nt":
+                    builtins = builtins + ["ls", "dir"]
                 for b in builtins:
                     if b.startswith(prefix):
                         completions.append(b)

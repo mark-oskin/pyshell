@@ -7,7 +7,7 @@ import subprocess
 import sys
 from typing import Any
 
-from pyshell.builtins import make_builtins, run_builtin_command
+from pyshell.builtins import make_builtins, run_builtin_command, run_ls_dir
 from pyshell.expansion import expand_command_argv, expand_redirect_path
 
 # Type for redirect list: (op, path or None for 2>&1)
@@ -16,7 +16,7 @@ Redirects = list[tuple[str, str | None]]
 BUILTIN_NAMES = frozenset({
     "cd", "pwd", "exit", "env", "run", "run_capture", "history", "alias", "unalias",
     "prompt", "help", "jobs", "fg", "bg", "pushd", "popd", "dirs", "source", "type", "which",
-})
+}) | (frozenset({"ls", "dir"}) if os.name == "nt" else frozenset())
 
 
 class Executor:
@@ -257,6 +257,31 @@ class Executor:
             else:
                 self._set_exit_code(0)
             return None
+        if os.name == "nt" and name in ("ls", "dir"):
+            try:
+                out = run_ls_dir(argv)
+            except OSError as e:
+                print(f"pyshell: {name}: {e}", file=sys.stderr)
+                self._set_exit_code(1)
+                return None
+            stdout_f, stderr_f, stdin_f, _ = _apply_redirects(redirects)
+            try:
+                if stdout_f is not None and stdout_f != sys.stdout:
+                    stdout_f.write(out)
+                    if not out.endswith("\n"):
+                        stdout_f.write("\n")
+                else:
+                    self._set_exit_code(0)
+                    return out
+            finally:
+                if stdout_f is not None and stdout_f != sys.stdout:
+                    stdout_f.close()
+                if stderr_f is not None and stderr_f != sys.stderr:
+                    stderr_f.close()
+                if stdin_f is not None and stdin_f != sys.stdin:
+                    stdin_f.close()
+            self._set_exit_code(0)
+            return None
         try:
             result = run_builtin_command(name, args)
         except SystemExit:
@@ -270,7 +295,7 @@ class Executor:
         if argv is None:
             self._set_exit_code(127)
             print(f"pyshell: command not found: {name}", file=sys.stderr)
-            sys.exit(127)
+            return None
         stdout_f, stderr_f, stdin_f, stderr_to_stdout = _apply_redirects(redirects)
         try:
             if background:
@@ -315,11 +340,11 @@ class Executor:
         except FileNotFoundError:
             self._set_exit_code(127)
             print(f"pyshell: command not found: {name}", file=sys.stderr)
-            sys.exit(127)
+            return None
         except PermissionError:
             self._set_exit_code(126)
             print(f"pyshell: permission denied: {name}", file=sys.stderr)
-            sys.exit(126)
+            return None
         finally:
             if stdout_f is not None and stdout_f != sys.stdout:
                 stdout_f.close()
@@ -363,9 +388,10 @@ class Executor:
                     continue
                 resolved = _resolve_command_argv(argv)
                 if resolved is None:
+                    last_code = 127
                     self._set_exit_code(127)
                     print(f"pyshell: command not found: {name}", file=sys.stderr)
-                    sys.exit(127)
+                    break
                 is_first = i == 0
                 is_last = i == len(segments) - 1
                 proc_stdin: Any = None
@@ -397,9 +423,10 @@ class Executor:
                     last_stdout = out or ""
                     last_code = proc.returncode if proc.returncode is not None else 0
                 except FileNotFoundError:
+                    last_code = 127
                     self._set_exit_code(127)
                     print(f"pyshell: command not found: {name}", file=sys.stderr)
-                    sys.exit(127)
+                    break
             self._set_exit_code(last_code)
             return None
         finally:

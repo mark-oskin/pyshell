@@ -74,9 +74,10 @@ class TestRunCommand(unittest.TestCase):
 
     def test_nonexistent_command_exits_127(self):
         ex = Executor()
-        with self.assertRaises(SystemExit) as ctx:
-            ex.run_command(["this_command_does_not_exist_xyz"])
-        self.assertEqual(ctx.exception.code, 127)
+        ex.set_exit_callback(lambda code: None)
+        result = ex.run_command(["this_command_does_not_exist_xyz"])
+        self.assertIsNone(result)
+        self.assertEqual(ex._last_exit_code, 127)
 
     def test_run_command_with_redirect(self):
         ex = Executor()
