@@ -277,6 +277,18 @@ class TestCommandSubstitution(unittest.TestCase):
         self.assertIn("x", expanded)
         self.assertIn("y", expanded)
 
+    def test_pipeline_inside_command_substitution(self):
+        """Pipeline inside backticks (e.g. echo `ls | wc`) must not raise 'fileno'."""
+        import sys as _sys
+        py = _sys.executable.replace("\\", "/")
+        shell = Shell()
+        shell.executor.set_exit_callback(lambda code: None)
+        # Simple pipeline: first prints 1, second prints 2; output is "2"
+        sub = f'{py} -c "print(1)" | {py} -c "print(2)"'
+        expanded = shell._expand_command_substitution("result: `" + sub + "`")
+        self.assertIn("result:", expanded)
+        self.assertIn("2", expanded)
+
 
 class TestSource(unittest.TestCase):
     """source / . runs file in current shell."""

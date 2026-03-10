@@ -24,6 +24,12 @@ def parse_line(line: str) -> tuple[str, str | list | list[list[str]]]:
                 return ("pipeline", [_split_command(seg) for seg in segments])
         return ("command", _split_command(line))
 
+    # Unquoted | means pipeline (e.g. "ls|wc"); prefer over Python so we don't run "ls|wc" as Python.
+    if "|" in line_stripped and _pipe_not_inside_quotes(line):
+        segments = _split_pipeline(line)
+        if len(segments) >= 2:
+            return ("pipeline", [_split_command(seg) for seg in segments])
+
     # Single identifier (e.g. ls, pwd) → command (or pipeline)
     if _is_single_identifier(line_stripped):
         return as_command()

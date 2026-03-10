@@ -72,6 +72,14 @@ class TestParseLine(unittest.TestCase):
         self.assertEqual(payload[1], ["cat"])
         self.assertEqual(payload[2], ["cat"])
 
+    def test_pipeline_no_spaces_around_pipe(self):
+        """ls|wc (no spaces) must be pipeline, not Python (which would treat | as bitwise or)."""
+        kind, payload = parse_line("ls|wc")
+        self.assertEqual(kind, "pipeline")
+        self.assertEqual(len(payload), 2)
+        self.assertEqual(payload[0], ["ls"])
+        self.assertEqual(payload[1], ["wc"])
+
     def test_pipe_inside_quotes_not_split(self):
         # "a|b" is one token; single identifier "a|b" isn't valid, so falls through
         # Line with = or ( is Python. Here we have no = or (, and "a|b".split() is one part

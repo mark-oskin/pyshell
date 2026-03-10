@@ -1,6 +1,5 @@
 """Main REPL and shell orchestration."""
 
-import io
 import os
 import subprocess
 import sys
@@ -659,15 +658,22 @@ class Shell:
         return line
 
     def _run_and_capture(self, line: str) -> tuple[str, int]:
-        """Run one line through _eval, capture stdout, return (output, exit_code)."""
+        """Run one line through _eval, capture stdout, return (output, exit_code).
+        Use a real pipe (not StringIO) so pipelines get a real fd and produce output on all platforms.
+        """
         old_stdout = sys.stdout
-        buf = io.StringIO()
+        rfd, wfd = os.pipe()
+        enc = getattr(old_stdout, "encoding", None) or "utf-8"
+        write_pipe = open(wfd, "w", encoding=enc)  # noqa: SIM115
+        sys.stdout = write_pipe
         try:
-            sys.stdout = buf
             self._eval(line.strip())
-            return (buf.getvalue(), self.executor._last_exit_code)
         finally:
+            write_pipe.close()
             sys.stdout = old_stdout
+        with open(rfd, "r", encoding=enc) as read_pipe:
+            output = read_pipe.read()
+        return (output, self.executor._last_exit_code)
 
     def _expand_command_substitution(self, line: str, depth: int = 0) -> str:
         """Replace $(...) and `...` with command output. Max depth 5 to avoid infinite recursion."""

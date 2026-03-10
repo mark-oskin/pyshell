@@ -435,6 +435,9 @@ class Executor:
             return self.run_command(segments[0], redirects=redirects, background=background)
         env = self._get_namespace()
         stdout_f, stderr_f, stdin_f, stderr_to_stdout = _apply_redirects(redirects)
+        out_target = stdout_f or sys.stdout
+        # When capturing (command substitution uses a pipe, not the real stdout), don't pass sys.stderr to Popen (Windows can close it).
+        capturing = out_target is not getattr(sys, "__stdout__", sys.stdout) or not _has_fileno(out_target)
         try:
             last_stdout: str | None = None
             last_code = 0
@@ -460,17 +463,38 @@ class Executor:
                     break
                 is_first = i == 0
                 is_last = i == len(segments) - 1
+                out_target = stdout_f or sys.stdout
+                use_pipe_for_last = is_last and not _has_fileno(out_target)
                 proc_stdin: Any = None
                 if is_first and stdin_f is not None:
                     proc_stdin = stdin_f
                 elif last_stdout is not None:
                     proc_stdin = subprocess.PIPE
                 elif proc_stdin is None:
-                    proc_stdin = _safe_stdin()
-                proc_stdout = subprocess.PIPE if not is_last else (stdout_f or sys.stdout)
-                proc_stderr = sys.stderr if not stderr_to_stdout else subprocess.STDOUT
-                if is_last and stderr_f is not None and not stderr_to_stdout:
-                    proc_stderr = stderr_f
+                    proc_stdin = subprocess.DEVNULL if (capturing and is_first) else _safe_stdin()
+                # When passing our capture pipe to the last stage, pass a duplicate fd so
+                # communicate() does not close the original (which is sys.stdout in _run_and_capture).
+                if is_last and not use_pipe_for_last and capturing:
+                    dup_fd = os.dup(out_target.fileno())
+                    proc_stdout = open(
+                        dup_fd, "w", encoding=getattr(out_target, "encoding", None) or "utf-8"
+                    )
+                    close_proc_stdout = True
+                else:
+                    proc_stdout = (
+                        subprocess.PIPE
+                        if (not is_last or use_pipe_for_last)
+                        else out_target
+                    )
+                    close_proc_stdout = False
+                if capturing:
+                    proc_stderr = subprocess.PIPE
+                elif not stderr_to_stdout:
+                    proc_stderr = sys.stderr
+                    if is_last and stderr_f is not None:
+                        proc_stderr = stderr_f
+                else:
+                    proc_stderr = subprocess.STDOUT
                 try:
                     proc = subprocess.Popen(
                         resolved,
@@ -482,11 +506,25 @@ class Executor:
                     )
                     if last_stdout is not None and proc_stdin == subprocess.PIPE:
                         proc.stdin.write(last_stdout)  # type: ignore
-                        proc.stdin.close()  # type: ignore
+                        # Do not close stdin here: communicate() flushes then closes it; closing first causes "I/O operation on closed file" on Linux.
                     if is_first and stdin_f is not None and proc_stdin is stdin_f:
                         pass  # stdin is the file, not PIPE
-                    out, _ = proc.communicate()
+                    try:
+                        out, err = proc.communicate()
+                    finally:
+                        if close_proc_stdout:
+                            proc_stdout.close()
+                    if capturing and err:
+                        try:
+                            sys.stderr.write(err)
+                            sys.stderr.flush()
+                        except OSError:
+                            pass  # e.g. stderr closed on Windows when capturing
                     last_stdout = out or ""
+                    if use_pipe_for_last and last_stdout:
+                        out_target.write(last_stdout)
+                        if hasattr(out_target, "flush"):
+                            out_target.flush()
                     last_code = proc.returncode if proc.returncode is not None else 0
                 except FileNotFoundError:
                     last_code = 127
