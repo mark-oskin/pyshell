@@ -22,7 +22,7 @@ BUILTIN_HELP: dict[str, str] = {
     "history": "Show command history.",
     "jobs": "List background jobs.",
     "popd": "Pop directory from stack and cd to it.",
-    "prompt": "Set the REPL prompt. Use {cwd}, {base}. prompt() = default.",
+    "prompt": "Set the REPL prompt. Use {cwd}, {base}, {user}, {hostname}, {time}, {exit}, {jobs}. prompt() = default.",
     "pushd": "Push cwd onto stack and cd to dir; no arg = swap cwd with top.",
     "pwd": "Print working directory.",
     "run": "Run an external command from Python. run(cmd, *args) -> exit code.",
@@ -32,10 +32,74 @@ BUILTIN_HELP: dict[str, str] = {
     "unalias": "Remove an alias. unalias name",
     "which": "Print path or builtin/alias for a command. which name [...]",
 }
-# Windows-only: ls and dir (Unix uses external ls)
+# Windows-only: ls, dir, cat, echo (Unix uses external)
 if os.name == "nt":
     BUILTIN_HELP["dir"] = "List directory contents. dir [path...] [-l] [-a] (Windows builtin)."
     BUILTIN_HELP["ls"] = "List directory contents. ls [path...] [-l] [-a] (Windows builtin)."
+    BUILTIN_HELP["cat"] = "Print file contents. cat [file...] (Windows builtin)."
+    BUILTIN_HELP["echo"] = "Print arguments. echo [-n] [arg...] (Windows builtin)."
+
+BUILTIN_HELP["true"] = "Do nothing; exit with code 0."
+BUILTIN_HELP["false"] = "Do nothing; exit with code 1."
+BUILTIN_HELP["mkdir"] = "Create directory. mkdir [-p] path... (creates parents with -p)."
+
+
+def run_mkdir(argv: list[str]) -> bool:
+    """Built-in mkdir with -p/--parents: create directories. Returns True if all succeeded."""
+    args = argv[1:]
+    parents = False
+    paths = []
+    i = 0
+    while i < len(args):
+        a = args[i]
+        if a in ("-p", "--parents"):
+            parents = True
+        elif a.startswith("-"):
+            pass  # ignore other flags
+        else:
+            paths.append(a)
+        i += 1
+    ok = True
+    for path in paths:
+        path = os.path.expanduser(path)
+        try:
+            if parents:
+                os.makedirs(path, exist_ok=True)
+            else:
+                os.mkdir(path)
+        except OSError as e:
+            print(f"mkdir: {path}: {e}", file=sys.stderr)
+            ok = False
+    return ok
+
+
+def run_cat(argv: list[str]) -> str:
+    """Built-in cat for Windows: print file contents. argv[0] is 'cat'; rest are paths."""
+    lines: list[str] = []
+    for path in argv[1:] or ["-"]:
+        if path == "-":
+            lines.append(sys.stdin.read())
+            continue
+        path = os.path.expanduser(path)
+        try:
+            with open(path, encoding="utf-8") as f:
+                lines.append(f.read())
+        except OSError as e:
+            print(f"cat: {path}: {e}", file=sys.stderr)
+        except Exception as e:
+            print(f"cat: {path}: {e}", file=sys.stderr)
+    return "".join(lines)
+
+
+def run_echo(argv: list[str]) -> str:
+    """Built-in echo for Windows: print arguments. argv[0] is 'echo'; -n = no trailing newline."""
+    args = argv[1:]
+    no_newline = False
+    if args and args[0] == "-n":
+        no_newline = True
+        args = args[1:]
+    s = " ".join(args)
+    return s + ("" if no_newline else "\n")
 
 
 def run_ls_dir(argv: list[str]) -> str:
@@ -199,7 +263,7 @@ def make_builtins(
         _aliases.pop(name, None)
 
     def prompt(s: str | None = None) -> None:
-        """Set the REPL prompt. Use {cwd} and {base} for current dir. prompt() or prompt(None) = default."""
+        """Set the REPL prompt. Placeholders: {cwd}, {base}, {user}, {hostname}, {time}, {exit}, {jobs}. prompt() = default."""
         if set_prompt:
             set_prompt(s)
 
@@ -210,7 +274,8 @@ def make_builtins(
             for name in sorted(BUILTIN_HELP.keys()):
                 lines.append(f"  {name:<12} {BUILTIN_HELP[name]}")
             lines.append("")
-            lines.append("Python: assignments, expressions, print(), etc. External commands: type name and args.")
+            lines.append("Python: assignments, expressions, print(), etc. shell.run(cmd), shell.capture(cmd), shell.cd/pwd/pushd/popd/dirs.")
+            lines.append("External commands: type name and args.")
             return "\n".join(lines)
         if topic in BUILTIN_HELP:
             fn = {"cd": cd, "pwd": pwd, "exit": exit, "env": env, "run": run, "run_capture": run_capture, "history": history, "alias": alias, "unalias": unalias, "prompt": prompt, "help": help}.get(topic)

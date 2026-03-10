@@ -8,7 +8,9 @@ A command-line shell written in Python with **Python-like syntax**. Use Python e
 - **Shell commands**: Type a command and arguments (e.g. `ls -la`, `git status`); if it isn’t valid Python, it’s run as an external program.
 - **Line continuation**: End a line with `\` to continue on the next line.
 - **Built-in commands**: `cd`, `pwd`, `exit`, `env`, `alias`, `unalias`, `jobs`, `fg`, `bg`, `help` (as commands or from Python). You can type `pwd` or `pwd()` — both work.
-- **PATH**: External commands (e.g. `ls`) are resolved using your `PATH`. On **Windows**, `ls` and `dir` are built-in (Unix-style listing with `-l`, `-a`, `-1`) when no external command is used.
+- **PATH**: External commands (e.g. `ls`) are resolved using your `PATH`. On **Windows**, `ls`, `dir`, `cat`, and `echo` are built-in (Unix-style) when not on PATH.
+- **true / false**: Built-in no-ops that set exit code 0 or 1 (e.g. for `false || echo failed`).
+- **mkdir -p**: Built-in `mkdir` supports `-p` / `--parents` to create parent directories on all platforms.
 - **Aliases**: `alias ll='ls -la'` then type `ll`; `unalias ll` to remove. Use `alias` with no args to list.
 - **Redirects**: `> file`, `>> file`, `< file`, `2> err`, `2>> err`, `2>&1` (e.g. `echo hi > out.txt`).
 - **Background jobs**: End a command with `&` to run in background; `jobs` to list, `fg` to bring last job to foreground.

@@ -5,9 +5,22 @@ import os
 import shutil
 import subprocess
 import sys
+from datetime import datetime
 from typing import Any
 
-from pyshell.builtins import make_builtins, run_builtin_command, run_ls_dir
+try:
+    import socket
+except ImportError:
+    socket = None  # type: ignore
+
+from pyshell.builtins import (
+    make_builtins,
+    run_builtin_command,
+    run_ls_dir,
+    run_cat,
+    run_echo,
+    run_mkdir,
+)
 from pyshell.expansion import expand_command_argv, expand_redirect_path
 
 # Type for redirect list: (op, path or None for 2>&1)
@@ -16,7 +29,8 @@ Redirects = list[tuple[str, str | None]]
 BUILTIN_NAMES = frozenset({
     "cd", "pwd", "exit", "env", "run", "run_capture", "history", "alias", "unalias",
     "prompt", "help", "jobs", "fg", "bg", "pushd", "popd", "dirs", "source", "type", "which",
-}) | (frozenset({"ls", "dir"}) if os.name == "nt" else frozenset())
+    "true", "false", "mkdir",
+}) | (frozenset({"ls", "dir", "cat", "echo"}) if os.name == "nt" else frozenset())
 
 
 class Executor:
@@ -33,6 +47,11 @@ class Executor:
         self._prompt: str | None = None
         self._source_callback: Any = None
         self._dir_stack: list[str] = []
+        self._shell_helper: Any = None
+
+    def set_shell_helper(self, helper: Any) -> None:
+        """Set the shell helper object (exposed as 'shell' in Python namespace)."""
+        self._shell_helper = helper
 
     def set_exit_callback(self, callback: Any) -> None:
         self._exit_callback = callback
@@ -71,6 +90,8 @@ class Executor:
             self._namespace.update(os.environ)
         # Expose last command exit code (updated after each command/pipeline)
         self._namespace["last_exit_code"] = self._last_exit_code
+        if self._shell_helper is not None:
+            self._namespace["shell"] = self._shell_helper
         return self._namespace
 
     def _set_exit_code(self, code: int) -> None:
@@ -87,8 +108,16 @@ class Executor:
         except OSError:
             cwd = ""
             base = ""
+        user = os.environ.get("USER") or os.environ.get("USERNAME") or ""
+        hostname = socket.gethostname() if socket else ""
+        time_str = datetime.now().strftime("%H:%M:%S")
+        exit_str = str(self._last_exit_code)
+        jobs_str = str(len(self._jobs))
         if self._prompt is not None:
-            return self._prompt.replace("{cwd}", cwd).replace("{base}", base)
+            s = self._prompt.replace("{cwd}", cwd).replace("{base}", base)
+            s = s.replace("{user}", user).replace("{hostname}", hostname)
+            s = s.replace("{time}", time_str).replace("{exit}", exit_str).replace("{jobs}", jobs_str)
+            return s
         return f"[{base}] >>> "
 
     def run_python(self, source: str, original_line: str) -> Any:
@@ -167,6 +196,16 @@ class Executor:
                     else:
                         any_fail = True
             self._set_exit_code(1 if any_fail else 0)
+            return None
+        if name == "true":
+            self._set_exit_code(0)
+            return None
+        if name == "false":
+            self._set_exit_code(1)
+            return None
+        if name == "mkdir":
+            ok = run_mkdir(argv)
+            self._set_exit_code(0 if ok else 1)
             return None
         if name == "history" and self._history_callback is not None:
             for line in self._history_callback():
@@ -257,6 +296,29 @@ class Executor:
             else:
                 self._set_exit_code(0)
             return None
+        if os.name == "nt" and name in ("cat", "echo"):
+            try:
+                out = run_cat(argv) if name == "cat" else run_echo(argv)
+            except OSError as e:
+                print(f"pyshell: {name}: {e}", file=sys.stderr)
+                self._set_exit_code(1)
+                return None
+            stdout_f, stderr_f, stdin_f, _ = _apply_redirects(redirects)
+            try:
+                if stdout_f is not None and stdout_f != sys.stdout:
+                    stdout_f.write(out)
+                else:
+                    self._set_exit_code(0)
+                    return out
+            finally:
+                if stdout_f is not None and stdout_f != sys.stdout:
+                    stdout_f.close()
+                if stderr_f is not None and stderr_f != sys.stderr:
+                    stderr_f.close()
+                if stdin_f is not None and stdin_f != sys.stdin:
+                    stdin_f.close()
+            self._set_exit_code(0)
+            return None
         if os.name == "nt" and name in ("ls", "dir"):
             try:
                 out = run_ls_dir(argv)
@@ -321,22 +383,26 @@ class Executor:
                 not stderr_to_stdout
                 and (stderr_f is None and not _has_fileno(sys.stderr))
             )
-            proc = subprocess.run(
-                argv,
-                shell=False,
-                env=os.environ,
-                stdout=subprocess.PIPE if use_pipe_stdout else out_target,
-                stderr=subprocess.STDOUT if stderr_to_stdout else (
-                    subprocess.PIPE if use_pipe_stderr else err_target
-                ),
-                stdin=stdin_f or _safe_stdin(),
-                text=True,
-            )
-            if use_pipe_stdout and proc.stdout:
-                sys.stdout.write(proc.stdout)
-            if use_pipe_stderr and proc.stderr:
-                sys.stderr.write(proc.stderr)
-            self._set_exit_code(proc.returncode if proc.returncode is not None else 0)
+            try:
+                proc = subprocess.run(
+                    argv,
+                    shell=False,
+                    env=os.environ,
+                    stdout=subprocess.PIPE if use_pipe_stdout else out_target,
+                    stderr=subprocess.STDOUT if stderr_to_stdout else (
+                        subprocess.PIPE if use_pipe_stderr else err_target
+                    ),
+                    stdin=stdin_f or _safe_stdin(),
+                    text=True,
+                )
+                if use_pipe_stdout and proc.stdout:
+                    sys.stdout.write(proc.stdout)
+                if use_pipe_stderr and proc.stderr:
+                    sys.stderr.write(proc.stderr)
+                self._set_exit_code(proc.returncode if proc.returncode is not None else 0)
+            except KeyboardInterrupt:
+                self._set_exit_code(130)
+                raise
         except FileNotFoundError:
             self._set_exit_code(127)
             print(f"pyshell: command not found: {name}", file=sys.stderr)
@@ -427,8 +493,15 @@ class Executor:
                     self._set_exit_code(127)
                     print(f"pyshell: command not found: {name}", file=sys.stderr)
                     break
+                except KeyboardInterrupt:
+                    last_code = 130
+                    self._set_exit_code(130)
+                    raise
             self._set_exit_code(last_code)
             return None
+        except KeyboardInterrupt:
+            self._set_exit_code(130)
+            raise
         finally:
             if stdout_f is not None and stdout_f != sys.stdout:
                 stdout_f.close()

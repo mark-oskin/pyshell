@@ -192,6 +192,32 @@ class TestTabCompletion(unittest.TestCase):
         self.assertIn("pwd", completions)
         self.assertIn("exit", completions)
 
+    def test_get_completions_second_word_is_path(self):
+        """After 'cat RE', completions should be path names matching RE, not commands."""
+        shell = Shell()
+        shell.executor.set_exit_callback(lambda code: None)
+        with unittest.mock.patch("pyshell.shell.readline") as m:
+            m.get_line_buffer.return_value = "cat RE"
+            m.get_begidx.return_value = 4
+            m.get_endidx.return_value = 6
+            completions = shell._get_completions("RE")
+        # Should not complete to commands (e.g. run, readline)
+        self.assertNotIn("run", completions)
+        # Should complete to paths in cwd matching RE (case-insensitive)
+        self.assertIn("README.md", completions)
+
+    def test_get_completions_no_line_buffer_includes_paths(self):
+        """When line buffer is empty (e.g. Windows), completing 'RE' still offers path completions."""
+        shell = Shell()
+        shell.executor.set_exit_callback(lambda code: None)
+        with unittest.mock.patch("pyshell.shell.readline") as m:
+            m.get_line_buffer.return_value = ""
+            m.get_begidx.return_value = 0
+            m.get_endidx.return_value = 2
+            completions = shell._get_completions("RE")
+        # Must include path completion (e.g. README.md) when buffer is unavailable
+        self.assertIn("README.md", completions)
+
 
 class TestConditionalExecution(unittest.TestCase):
     """&& and || short-circuit execution."""
