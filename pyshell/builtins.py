@@ -1,4 +1,9 @@
-"""Shell built-in commands and Python-builtin helpers."""
+"""Shell built-in commands and Python-builtin helpers.
+
+Provides run_* implementations for mkdir, cat, echo, ls/dir (Windows),
+make_builtins() for the Python namespace, and run_builtin_command() for
+shell-invoked builtins. BUILTIN_HELP and EXTENDED_HELP drive the help command.
+"""
 
 import os
 import subprocess
@@ -83,7 +88,14 @@ Examples:
 
 
 def run_mkdir(argv: list[str]) -> bool:
-    """Built-in mkdir with -p/--parents: create directories. Returns True if all succeeded."""
+    """Create directories; -p/--parents creates parent dirs.
+
+    Args:
+        argv: [ "mkdir", "-p"?, path, ... ].
+
+    Returns:
+        True if all directories were created or already existed; False on error.
+    """
     args = argv[1:]
     parents = False
     paths = []
@@ -112,7 +124,14 @@ def run_mkdir(argv: list[str]) -> bool:
 
 
 def run_cat(argv: list[str]) -> str:
-    """Built-in cat for Windows: print file contents. argv[0] is 'cat'; rest are paths."""
+    """Print file contents (Windows builtin when cat not on PATH).
+
+    Args:
+        argv: [ "cat", path, ... ]. path "-" means stdin.
+
+    Returns:
+        Concatenated file contents as a string.
+    """
     lines: list[str] = []
     for path in argv[1:] or ["-"]:
         if path == "-":
@@ -130,7 +149,14 @@ def run_cat(argv: list[str]) -> str:
 
 
 def run_echo(argv: list[str]) -> str:
-    """Built-in echo for Windows: print arguments. argv[0] is 'echo'; -n = no trailing newline."""
+    """Print arguments (Windows builtin). -n suppresses trailing newline.
+
+    Args:
+        argv: [ "echo", "-n"?, arg, ... ].
+
+    Returns:
+        Arguments joined by space, with or without trailing newline.
+    """
     args = argv[1:]
     no_newline = False
     if args and args[0] == "-n":
@@ -141,11 +167,13 @@ def run_echo(argv: list[str]) -> str:
 
 
 def run_ls_dir(argv: list[str]) -> str:
-    """
-    Built-in ls/dir for Windows: list directory contents like Unix ls.
-    Supports -l (long), -a/--all (include dotfiles), -1 (one per line).
-    argv[0] is the command name (ls or dir); parse argv[1:] for paths and flags.
-    Returns the formatted output string.
+    """List directory contents like Unix ls (Windows builtin).
+
+    Args:
+        argv: [ "ls"|"dir", path?, -l?, -a|--all?, -1? ]. -l long, -a dotfiles, -1 one per line.
+
+    Returns:
+        Formatted listing string.
     """
     paths: list[str] = []
     long_fmt = False
@@ -340,9 +368,14 @@ def make_builtins(
 
 
 def run_builtin_command(name: str, args: list[str]) -> str | int | None:
-    """
-    Run a builtin by name with string args. Returns output string or exit code.
-    Returns None if not a builtin (caller should run external command).
+    """Run a builtin command by name (shell invocation).
+
+    Args:
+        name: Command name (e.g. "cd", "help").
+        args: List of string arguments.
+
+    Returns:
+        Output string, exit code (int), or None if name is not a builtin.
     """
     if name == "cd":
         path = args[0] if args else ""

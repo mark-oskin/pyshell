@@ -1,11 +1,18 @@
-"""Parse user input: distinguish Python-like code from shell commands."""
+"""Parse user input: distinguish Python-like code from shell commands.
+
+All functions in this module operate on raw input lines; they do not execute
+anything. Use parse_line to classify, parse_redirects to get argv/redirects,
+and split_conditional / _split_pipeline for conditionals and pipelines.
+"""
 
 import ast
 
 
 def parse_line(line: str) -> tuple[str, str | list | list[list[str]]]:
-    """
-    Classify a line as Python-like code, a command, or a pipeline.
+    """Classify a line as Python-like code, a command, or a pipeline.
+
+    Args:
+        line: Raw input line (may be stripped by caller).
 
     Returns:
         ("python", source) if the line is valid Python.
@@ -47,7 +54,16 @@ def parse_line(line: str) -> tuple[str, str | list | list[list[str]]]:
 
 
 def _is_single_identifier(line: str) -> bool:
-    """True if the line is exactly one identifier (e.g. ls, pwd). Run as command."""
+    """Return True if the line is exactly one identifier (e.g. ls, pwd).
+
+    Such lines are run as commands rather than Python.
+
+    Args:
+        line: Input line (typically stripped).
+
+    Returns:
+        True if a single token that is a valid Python identifier.
+    """
     s = line.strip()
     if not s:
         return False
@@ -74,7 +90,17 @@ def _is_python(line: str) -> bool:
 
 
 def has_unquoted_redirect_or_background(line: str) -> bool:
-    """True if the line contains redirect tokens or trailing & outside quotes."""
+    """Return True if the line has redirect tokens or trailing & outside quotes.
+
+    Used to decide whether to run the line as shell (with redirects) or as Python.
+    Respects double and single quotes; backslash escapes.
+
+    Args:
+        line: Full input line.
+
+    Returns:
+        True if unquoted >, >>, <, <<<, 2>, 2>>, 2>&1, or trailing & is present.
+    """
     quote: str | None = None
     i = 0
     n = len(line)
@@ -110,7 +136,14 @@ def has_unquoted_redirect_or_background(line: str) -> bool:
 
 
 def _pipe_not_inside_quotes(line: str) -> bool:
-    """True if there is a | that is not inside quotes (so we can split pipeline)."""
+    """Return True if there is an unquoted | (so the line can be a pipeline).
+
+    Args:
+        line: Input line.
+
+    Returns:
+        True if at least one | is not inside single or double quotes.
+    """
     quote: str | None = None
     for i, c in enumerate(line):
         if quote:
@@ -126,7 +159,14 @@ def _pipe_not_inside_quotes(line: str) -> bool:
 
 
 def _split_pipeline(line: str) -> list[str]:
-    """Split line by |, respecting quotes. Returns list of segment strings."""
+    """Split line by unquoted | into pipeline segment strings.
+
+    Args:
+        line: Full pipeline line (e.g. "cmd1 | cmd2").
+
+    Returns:
+        List of segment strings, one per stage; quotes and backslash respected.
+    """
     segments: list[str] = []
     current: list[str] = []
     quote: str | None = None
@@ -164,7 +204,14 @@ def _split_pipeline(line: str) -> list[str]:
 
 
 def has_conditional(line: str) -> bool:
-    """True if line contains unquoted && or ||."""
+    """Return True if the line contains unquoted && or ||.
+
+    Args:
+        line: Input line.
+
+    Returns:
+        True if at least one && or || is outside quotes.
+    """
     quote: str | None = None
     i = 0
     n = len(line)
@@ -188,7 +235,14 @@ def has_conditional(line: str) -> bool:
 
 
 def split_conditional(line: str) -> list[tuple[str, str | None]]:
-    """Split by && and || (respecting quotes). Returns [(segment, connector), ...], connector is '&&', '||', or None."""
+    """Split line by unquoted && and || into segments and connectors.
+
+    Args:
+        line: Input line (e.g. "cmd1 && cmd2 || cmd3").
+
+    Returns:
+        List of (segment, connector). connector is "&&", "||", or None for the last.
+    """
     result: list[tuple[str, str | None]] = []
     current: list[str] = []
     quote: str | None = None
@@ -281,7 +335,14 @@ def parse_redirects(line: str) -> tuple[list[str], list[tuple[str, str | None]],
 
 
 def _split_command(line: str) -> list[str]:
-    """Split a command line into words, respecting double and single quotes."""
+    """Tokenize a command line into words, respecting quotes and backslash.
+
+    Args:
+        line: Command line string.
+
+    Returns:
+        List of tokens; quotes are not included in tokens.
+    """
     tokens: list[str] = []
     current: list[str] = []
     i = 0

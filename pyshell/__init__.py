@@ -1,4 +1,8 @@
-"""pyshell - A command-line shell with Python-like syntax."""
+"""pyshell — A command-line shell with Python-like syntax.
+
+Entry points: main() for CLI; Shell for programmatic REPL.
+See docs/DESIGN.md for architecture and docs/API.md for function index.
+"""
 
 __version__ = "0.1.0"
 

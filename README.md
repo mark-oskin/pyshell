@@ -215,8 +215,98 @@ In Python at the prompt or in `.pyshellrc` / script files, these are available i
 | `help()`, `help('name')` | Short help for builtins. |
 | `last_exit_code` | Exit code of the last run command (0 on success, etc.). |
 | `PATH`, `HOME`, … | All environment variables are in the namespace (e.g. `print(PATH)`). |
+| `shell` | Helper object with `run()`, `capture()`, `cd()`, `pwd()`, `pushd()`, `popd()`, `dirs()` (see below). |
 
-Example script that uses several of these:
+### Accessing shell functions from Python
+
+You can call shell-related behavior from Python code in two ways: **direct builtins** (same namespace as the REPL) and the **`shell`** helper object. Both work at the prompt and in script files.
+
+#### Direct builtins (function calls)
+
+Use `run`, `run_capture`, `cd`, `pwd`, etc. as normal Python functions. Arguments are passed as separate strings; no shell parsing (so no pipelines or redirects from these calls).
+
+```text
+>>> cd("~/projects")
+>>> pwd()
+'/home/you/projects'
+>>> run("ls", "-la")           # exit code goes to last_exit_code
+>>> last_exit_code
+0
+>>> out, err, code = run_capture("git", "status")
+>>> code
+0
+>>> print(out.strip()[:80])
+On branch main...
+>>> run_capture("echo", "hello")
+('hello\n', '', 0)
+```
+
+Change directory and run a command from Python:
+
+```text
+>>> cd("/tmp")
+>>> run("pwd")                 # runs in same shell; output goes to terminal
+>>> pwd()
+'/tmp'
+```
+
+Exit code and environment:
+
+```text
+>>> run("false")
+>>> last_exit_code
+1
+>>> "HOME" in env()
+True
+>>> env()["USER"]
+'you'
+```
+
+#### The `shell` object (full command lines)
+
+The name **`shell`** in the namespace is a helper that lets you run **entire command lines** as strings (so pipelines, redirects, and shell syntax are interpreted). Useful when you want to pass a single string or build commands dynamically.
+
+| Method | Description |
+|--------|-------------|
+| `shell.run(cmd)` | Run one command line (e.g. `"ls -la"`, `"git status"`). Returns exit code. |
+| `shell.capture(cmd)` | Run command line and capture stdout. Returns `(output_string, exit_code)`. |
+| `shell.cd(path)` | Change directory; no args = home. |
+| `shell.pwd()` | Current working directory. |
+| `shell.pushd(path)` | Push cwd onto stack, cd to path; no path = swap with top. |
+| `shell.popd()` | Pop directory from stack and cd to it. |
+| `shell.dirs()` | Directory stack as a single string (cwd first). |
+
+Examples:
+
+```text
+>>> shell.run("ls -la")        # full line; returns exit code
+0
+>>> out, code = shell.capture("git rev-parse --short HEAD")
+>>> out.strip()
+'a1b2c3d'
+>>> shell.run("echo hello > /tmp/out.txt")
+0
+>>> shell.capture("cat /tmp/out.txt")
+('hello\n', 0)
+>>> shell.run("pwd | cat")     # pipeline
+0
+>>> shell.cd("/tmp")
+>>> shell.pwd()
+'/tmp'
+>>> shell.pushd("/var")
+>>> shell.dirs()
+'/var /tmp'
+>>> shell.popd()
+>>> shell.pwd()
+'/tmp'
+```
+
+#### When to use which
+
+- **`run(cmd, arg1, ...)` / `run_capture(cmd, arg1, ...)`** — You have the command and args as separate values; no need for shell parsing. No pipelines or redirects in the call.
+- **`shell.run(cmd)` / `shell.capture(cmd)`** — You have a single command string (e.g. from user input or a config); pipelines and redirects work. Same shell environment (cwd, vars) as the rest of your Python.
+
+Example script that uses both styles:
 
 ```text
 # in script.psh or at the prompt
@@ -226,6 +316,10 @@ if code != 0:
     print("git failed:", err)
     exit(1)
 print(out)
+# run a full line (e.g. with pipe) from a variable
+cmd = "git log -1 --oneline"
+summary, code = shell.capture(cmd)
+print("Last commit:", summary.strip())
 ```
 
 ## Requirements

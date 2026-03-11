@@ -1,4 +1,4 @@
-"""Entry point for running pyshell as a module: python -m pyshell."""
+"""Entry point for `python -m pyshell`: delegates to main()."""
 
 from pyshell import main
 

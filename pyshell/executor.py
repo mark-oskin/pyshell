@@ -1,4 +1,9 @@
-"""Execute Python code and shell commands."""
+"""Execute Python code and shell commands.
+
+The Executor holds the Python namespace, aliases, jobs, prompt template,
+and callbacks. It runs Python via run_python, and shell commands/pipelines
+via run_command and run_pipeline. Redirects are applied in _apply_redirects.
+"""
 
 import ast
 import os
@@ -34,7 +39,12 @@ BUILTIN_NAMES = frozenset({
 
 
 class Executor:
-    """Evaluates Python-like code and runs shell commands."""
+    """Evaluates Python-like code and runs shell commands.
+
+    Holds namespace, aliases, jobs, prompt, and callbacks. Entry points:
+    run_python, run_command, run_pipeline. Builtins and external commands
+    are dispatched here; redirects and expansion are applied before execution.
+    """
 
     def __init__(self) -> None:
         self._namespace: dict[str, Any] = {}
@@ -50,17 +60,22 @@ class Executor:
         self._shell_helper: Any = None
 
     def set_shell_helper(self, helper: Any) -> None:
-        """Set the shell helper object (exposed as 'shell' in Python namespace)."""
+        """Set the object exposed as `shell` in the Python namespace."""
         self._shell_helper = helper
 
     def set_exit_callback(self, callback: Any) -> None:
+        """Set callback(code: int) invoked on exit(code)."""
         self._exit_callback = callback
 
     def set_history_callback(self, callback: Any) -> None:
+        """Set callback() that returns the list of history lines."""
         self._history_callback = callback
 
     def set_prompt(self, s: str | None) -> None:
-        """Set custom prompt string. Use {cwd} and {base} for current dir; None = default."""
+        """Set custom prompt template; None restores default.
+
+        Placeholders: {cwd}, {base}, {user}, {hostname}, {time}, {exit}, {jobs}.
+        """
         self._prompt = s
 
     def set_source_callback(self, callback: Any) -> None:
@@ -99,7 +114,7 @@ class Executor:
         self._namespace["last_exit_code"] = code
 
     def get_prompt(self) -> str:
-        """Return the REPL prompt (custom if set, else default with cwd)."""
+        """Return the current REPL prompt string with placeholders expanded."""
         try:
             cwd = os.getcwd()
             base = os.path.basename(cwd)
@@ -121,9 +136,14 @@ class Executor:
         return f"[{base}] >>> "
 
     def run_python(self, source: str, original_line: str) -> Any:
-        """
-        Execute Python source. For expressions, return the value (for printing).
-        For statements, return None (or last expression in interactive style).
+        """Execute Python source in the shell namespace.
+
+        Args:
+            source: Python code (may differ from original_line after normalization).
+            original_line: Original line used for bare-name call (e.g. pwd → pwd()).
+
+        Returns:
+            Evaluated value for a single expression; None for statements.
         """
         ns = self._get_namespace()
         try:
@@ -148,7 +168,16 @@ class Executor:
         redirects: Redirects | None = None,
         background: bool = False,
     ) -> Any:
-        """Run a shell command (builtin or external). Returns output or None."""
+        """Run a single command (builtin or external).
+
+        Args:
+            argv: Command and args (after parse_redirects); will be expanded.
+            redirects: Optional list of (op, path); applied before execution.
+            background: If True, run in background and add to jobs.
+
+        Returns:
+            Output string for some builtins (e.g. pwd, dirs); None otherwise.
+        """
         redirects = redirects or []
         if not argv:
             self._set_exit_code(0)
@@ -426,7 +455,16 @@ class Executor:
         redirects: Redirects | None = None,
         background: bool = False,
     ) -> Any:
-        """Run a pipeline of commands (cmd1 | cmd2 | ...). Returns last command's output or None."""
+        """Run a pipeline; redirects apply to the last stage only.
+
+        Args:
+            segments: List of argv lists (one per stage).
+            redirects: Optional; applied to last stage.
+            background: If True, run last stage in background.
+
+        Returns:
+            Last command output or None.
+        """
         redirects = redirects or []
         if not segments:
             self._set_exit_code(0)
@@ -550,7 +588,11 @@ class Executor:
 
 
 def _safe_stdin() -> Any:
-    """Return stdin for subprocess; use DEVNULL if sys.stdin has no fileno (e.g. under pytest)."""
+    """Return stdin for subprocess; use DEVNULL if sys.stdin has no fileno.
+
+    Returns:
+        sys.stdin if it has fileno(), else subprocess.DEVNULL.
+    """
     try:
         sys.stdin.fileno()
         return sys.stdin
@@ -559,6 +601,7 @@ def _safe_stdin() -> Any:
 
 
 def _has_fileno(stream: Any) -> bool:
+    """Return True if stream has a valid fileno() (for subprocess pipes)."""
     try:
         stream.fileno()
         return True
@@ -567,7 +610,14 @@ def _has_fileno(stream: Any) -> bool:
 
 
 def _apply_redirects(redirects: Redirects) -> tuple[Any, Any, Any, bool]:
-    """Apply redirect list. Returns (stdout_file, stderr_file, stdin_file, stderr_to_stdout)."""
+    """Open files or pipes for redirect ops; return streams for subprocess.
+
+    Args:
+        redirects: List of (op, path). op in ">", ">>", "<", "<<<", "2>", "2>>", "2>&1".
+
+    Returns:
+        (stdout_f, stderr_f, stdin_f, stderr_to_stdout). Unset streams are None.
+    """
     stdout_f: Any = None
     stderr_f: Any = None
     stdin_f: Any = None
@@ -599,6 +649,7 @@ def _apply_redirects(redirects: Redirects) -> tuple[Any, Any, Any, bool]:
 
 
 def _run_builtin_jobs(jobs: list) -> None:
+    """Print the list of background jobs (id, pid, status, cmd)."""
     for j in jobs:
         procs = j.get("procs", [])
         pid = procs[0].pid if procs else "?"
@@ -607,6 +658,7 @@ def _run_builtin_jobs(jobs: list) -> None:
 
 
 def _run_builtin_fg(jobs: list, set_exit_code: Any) -> None:
+    """Bring the most recent job to foreground; wait and set exit code."""
     if not jobs:
         print("pyshell: fg: no current job", file=sys.stderr)
         set_exit_code(1)
@@ -629,7 +681,7 @@ def _run_builtin_bg(jobs: list) -> None:
 
 
 def _is_expression_statement(tree: ast.AST) -> bool:
-    """True if the module is a single expression (e.g. 2+3 or f())."""
+    """Return True if the AST is a module with a single Expr node."""
     if not isinstance(tree, ast.Module):
         return False
     if len(tree.body) != 1:
@@ -639,12 +691,19 @@ def _is_expression_statement(tree: ast.AST) -> bool:
 
 
 def _is_bare_name(tree: ast.AST) -> bool:
-    """True if the expression is a single identifier (e.g. pwd, foo)."""
+    """Return True if the AST is a single Name (identifier)."""
     return isinstance(tree, ast.Name)
 
 
 def _resolve_command_argv(argv: list[str]) -> list[str] | None:
-    """Resolve the first token via PATH; return new argv or None if not found."""
+    """Resolve the command name via PATH; return full argv or None if not found.
+
+    Args:
+        argv: [command_name, ...]. command_name may be a path.
+
+    Returns:
+        [resolved_path, ...args] or None if command not found.
+    """
     if not argv:
         return argv
     name = argv[0]

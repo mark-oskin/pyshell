@@ -1,4 +1,9 @@
-"""Main REPL and shell orchestration."""
+"""Main REPL and shell orchestration.
+
+Entry point: main(). Shell runs the read-eval loop, line reading (readline or
+Windows fallback), history load/save, and .pyshellrc. It uses the parser to
+classify lines and the executor to run Python or commands/pipelines.
+"""
 
 import os
 import subprocess
@@ -27,7 +32,11 @@ else:
 
 
 def main() -> int:
-    """Run the pyshell REPL or execute a script. Returns exit code."""
+    """CLI entry: run REPL, script, or -c command.
+
+    Parses argv for -h, -v, --no-rc, -c CMD, and optional SCRIPT path.
+    Returns exit code (0 on success).
+    """
     from pyshell import __version__
     argv = sys.argv[1:]
     no_rc = False
@@ -81,25 +90,27 @@ def main() -> int:
 
 
 class ShellHelper:
-    """
-    Helper object exposed as `shell` in the Python namespace.
-    Lets scripts run commands, capture output, and use directory stack from Python.
+    """Helper exposed as `shell` in the Python namespace.
+
+    Provides run(cmd), capture(cmd), cd, pwd, pushd, popd, dirs for use
+    from Python code or scripts.
     """
 
     def __init__(self, shell: "Shell") -> None:
+        """Store reference to the Shell instance."""
         self._shell = shell
 
     def run(self, cmd: str) -> int:
-        """Run a shell command line. Returns exit code."""
+        """Run one shell command line. Returns exit code."""
         self._shell._eval(cmd)
         return self._shell.executor._last_exit_code
 
     def capture(self, cmd: str) -> tuple[str, int]:
-        """Run a command and capture stdout. Returns (output_string, exit_code)."""
+        """Run command and capture stdout. Returns (output_string, exit_code)."""
         return self._shell._run_and_capture(cmd)
 
     def cd(self, path: str = "") -> None:
-        """Change directory. No args = home."""
+        """Change current directory; no args = home (~)."""
         self._shell.executor.run_command(["cd", path] if path else ["cd"])
 
     def pwd(self) -> str:
@@ -107,7 +118,7 @@ class ShellHelper:
         return os.getcwd()
 
     def pushd(self, path: str = "") -> None:
-        """Push current dir onto stack and cd to path; no path = swap with top."""
+        """Push cwd onto stack and cd to path; no path = swap cwd with top of stack."""
         argv = ["pushd", path] if path else ["pushd"]
         self._shell.executor.run_command(argv)
 
@@ -137,7 +148,14 @@ def _print_usage() -> None:
 
 
 def run_script(path: str) -> int:
-    """Execute a pyshell script file. Returns exit code."""
+    """Execute a pyshell script file in a new Shell.
+
+    Args:
+        path: Path to script file.
+
+    Returns:
+        Exit code (0 on success; 127 on read error).
+    """
     try:
         with open(path, encoding="utf-8") as f:
             lines = f.read()
@@ -182,7 +200,11 @@ def run_script(path: str) -> int:
 
 
 class Shell:
-    """Interactive shell with Python-like syntax and command execution."""
+    """Interactive shell: REPL loop, line reading, history, and eval dispatch.
+
+    Uses parser for classification and executor for Python/command/pipeline
+    execution. Handles readline vs Windows fallback and persistent history.
+    """
 
     def __init__(self) -> None:
         self.executor = Executor()
@@ -618,7 +640,17 @@ class Shell:
         self.executor._set_exit_code(proc.returncode if proc.returncode is not None else 0)
 
     def _read_line_fallback(self, prompt: str) -> str | None:
-        """Read one line with tab completion and history when readline is not available (e.g. Windows)."""
+        """Read one line key-by-key (Windows fallback when readline unavailable).
+
+        Handles history (Up/Down), cursor (Left/Right, Home/End, Ctrl+A/E),
+        backspace, tab completion, and Ctrl+C/Ctrl+Z.
+
+        Args:
+            prompt: Prompt string already printed by caller.
+
+        Returns:
+            Entered line or None on EOF (Ctrl+Z on Windows).
+        """
         if msvcrt is None:
             try:
                 return input(prompt)
@@ -922,10 +954,10 @@ class Shell:
         return None
 
     def get_history(self) -> list[str]:
-        """Return the list of executed lines (for history builtin)."""
+        """Return a copy of the current history list (for history builtin)."""
         return list(self._history)
 
     def request_exit(self, code: int = 0) -> None:
-        """Request the shell to exit with the given code."""
+        """Stop the REPL and raise SystemExit(code)."""
         self._running = False
         raise SystemExit(code)

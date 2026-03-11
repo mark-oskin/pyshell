@@ -1,0 +1,24 @@
+---
+description: Keep design document and code documentation in sync with the codebase
+alwaysApply: true
+---
+
+# Documentation maintenance
+
+When you change pyshell behavior, architecture, or public APIs:
+
+1. **Design document** — Update `docs/DESIGN.md` if you:
+   - Add or remove modules or major entry points
+   - Change how parsing, execution, or line reading works
+   - Change data flow (e.g. redirects, pipelines, conditionals)
+   - Add extension points (callbacks, builtins, redirect ops)
+
+2. **Function docstrings** — Keep docstrings accurate and indexable:
+   - One-line summary; then `Args:` / `Returns:` / `Raises:` (Google style) where useful
+   - Public functions and important private helpers in `pyshell/*.py` should have clear docstrings
+
+3. **API index** — Update `docs/API.md` when you:
+   - Add or remove public functions or methods
+   - Change function signatures or return behavior in a way users/docs would care about
+
+The design doc and API index are the canonical map; keep them in sync so the project stays easy to navigate and onboard.
