@@ -649,11 +649,14 @@ class Shell:
             prompt: Prompt string already printed by caller.
 
         Returns:
-            Entered line or None on EOF (Ctrl+Z on Windows).
+            Entered line or None on EOF (Ctrl+Z or Ctrl+D).
         """
         if msvcrt is None:
+            # Write prompt ourselves so it is not truncated (input(prompt) truncates at first space on many platforms).
             try:
-                return input(prompt)
+                sys.stdout.write(prompt)
+                sys.stdout.flush()
+                return input()
             except EOFError:
                 return None
         # Windows: key-by-key with msvcrt, our own completion and history (Up/Down)
@@ -672,7 +675,9 @@ class Shell:
                 return line
             if ch == "\x03":  # Ctrl+C
                 raise KeyboardInterrupt
-            if ch == "\x1a":  # Ctrl+Z (EOF on Windows)
+            if ch == "\x1a":  # Ctrl+Z (traditional Windows EOF)
+                raise EOFError
+            if ch == "\x04":  # Ctrl+D (Linux-style EOF; also work on Windows)
                 raise EOFError
             if ch == "\x01":  # Ctrl+A: beginning of line
                 if pos > 0:
@@ -789,12 +794,11 @@ class Shell:
         r"""Read a line with optional continuation (trailing \ and unclosed delimiters)."""
         try:
             prompt = self.executor.get_prompt()
-            if readline is not None:
-                line = input(prompt)
-            else:
-                line = self._read_line_fallback(prompt)
-                if line is None:
-                    return None
+            # Never pass prompt to input(): readline truncates at first space (and at U+00A0).
+            # Always use fallback so we write the full prompt then input(); works on Windows and Linux/WSL.
+            line = self._read_line_fallback(prompt)
+            if line is None:
+                return None
         except EOFError:
             return None
         while line.endswith("\\"):

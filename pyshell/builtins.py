@@ -52,8 +52,8 @@ BUILTIN_HELP["mkdir"] = "Create directory. mkdir [-p] path... (creates parents w
 EXTENDED_HELP: dict[str, str] = {
     "prompt": """Prompt placeholders (use in prompt("...") or the prompt command):
 
-  {cwd}      Full path of current directory
-  {base}     Last component of current directory (e.g. project name)
+  {cwd}      Full path of current directory (resolved; symlinks show target name)
+  {base}     Last component of current directory (e.g. project name; resolved if symlink)
   {user}     Username (USER or USERNAME env)
   {hostname} Machine hostname
   {time}     Current time (HH:MM:SS)
@@ -166,6 +166,56 @@ def run_echo(argv: list[str]) -> str:
     return s + ("" if no_newline else "\n")
 
 
+def _ls_fallback_via_cmd(
+    list_path: str,
+    show_all: bool,
+    long_fmt: bool,
+    one_per_line: bool,
+    path: str,
+    paths: list[str],
+    lines: list[str],
+) -> bool:
+    """On Windows, when Python cannot list the directory (e.g. symlink/junction like
+    Application Data, or restricted/hidden entries), run cmd /c dir. Returns True on success.
+    """
+    try:
+        # /a = show all (including hidden/system); default dir hides hidden.
+        r = subprocess.run(
+            ["cmd", "/c", "dir", "/b", "/a", list_path] if show_all else ["cmd", "/c", "dir", "/b", list_path],
+            capture_output=True,
+            text=True,
+            timeout=10,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return False
+    if r.returncode != 0:
+        return False
+    names = [n.strip() for n in r.stdout.splitlines() if n.strip() and n.strip() not in (".", "..")]
+    if not show_all:
+        names = [n for n in names if not n.startswith(".")]
+    if path != "." and (len(paths) > 1 or long_fmt):
+        lines.append(f"{path}:")
+    if one_per_line or long_fmt:
+        for n in names:
+            lines.append(n)
+    else:
+        col_width = max(len(n) for n in names) + 2 if names else 0
+        try:
+            term_width = os.get_terminal_size().columns
+        except OSError:
+            term_width = 80
+        ncols = max(1, term_width // col_width) if col_width else 1
+        row = []
+        for i, n in enumerate(names):
+            row.append(n.ljust(col_width))
+            if (i + 1) % ncols == 0 or i == len(names) - 1:
+                lines.append("".join(row).rstrip())
+                row = []
+    if path != "." and len(paths) > 1 and names:
+        lines.append("")
+    return True
+
+
 def run_ls_dir(argv: list[str]) -> str:
     """List directory contents like Unix ls (Windows builtin).
 
@@ -199,6 +249,12 @@ def run_ls_dir(argv: list[str]) -> str:
             i += 1
     if not paths:
         paths = ["."]
+    # When path args were split by the shell (e.g. "ls My Folder" unquoted), join them
+    # so a single directory with spaces is listed (same idea as cd/pushd).
+    if len(paths) > 1:
+        joined = " ".join(paths)
+        if os.path.exists(joined):
+            paths = [joined]
     lines: list[str] = []
     for path in paths:
         path = os.path.expanduser(path)
@@ -214,39 +270,74 @@ def run_ls_dir(argv: list[str]) -> str:
             else:
                 lines.append(path)
             continue
-        # Directory
+        # Directory: use absolute path for syscalls so Windows can list directories
+        # whose path contains spaces or is a special folder (e.g. Application Data).
+        list_path = os.path.abspath(path)
+        entries: list[os.DirEntry | tuple[str, bool]] = []  # DirEntry or (name, is_dir)
         try:
-            entries = []
-            with os.scandir(path) as it:
+            with os.scandir(list_path) as it:
                 for e in it:
                     if not show_all and e.name.startswith("."):
                         continue
                     entries.append(e)
+        except PermissionError:
+            try:
+                names = os.listdir(list_path)
+            except OSError:
+                # Python APIs denied: symlink/junction (e.g. Application Data → Roaming) or
+                # restricted/hidden entries on Windows. Try system dir as fallback.
+                if os.name == "nt" and _ls_fallback_via_cmd(list_path, show_all, long_fmt, one_per_line, path, paths, lines):
+                    continue
+                lines.append(f"ls: {path}: Permission denied")
+                continue
+            # Build minimal entries: (name, is_dir) for sorting/display
+            for n in names:
+                if not show_all and n.startswith("."):
+                    continue
+                try:
+                    full = os.path.join(list_path, n)
+                    entries.append((n, os.path.isdir(full)))
+                except OSError:
+                    entries.append((n, False))
         except OSError as err:
             lines.append(f"ls: {path}: {err}")
             continue
         # Sort: directories first, then by name
-        def sort_key(ent: os.DirEntry) -> tuple[int, str]:
+        def sort_key(ent: os.DirEntry | tuple[str, bool]) -> tuple[int, str]:
+            if isinstance(ent, tuple):
+                name, is_dir = ent
+                return (0 if is_dir else 1, name.lower())
             return (0 if ent.is_dir() else 1, ent.name.lower())
         entries.sort(key=sort_key)
         if path != "." and (len(paths) > 1 or long_fmt):
             lines.append(f"{path}:")
+        def ent_name(ent: os.DirEntry | tuple[str, bool]) -> str:
+            return ent[0] if isinstance(ent, tuple) else ent.name
+        def ent_isdir(ent: os.DirEntry | tuple[str, bool]) -> bool:
+            return ent[1] if isinstance(ent, tuple) else ent.is_dir()
         if long_fmt or one_per_line:
             for e in entries:
-                try:
-                    st = e.stat()
-                except OSError:
-                    st = None
+                st = None
+                if not isinstance(e, tuple):
+                    try:
+                        st = e.stat()
+                    except OSError:
+                        pass
+                elif long_fmt:
+                    try:
+                        st = os.stat(os.path.join(list_path, ent_name(e)))
+                    except OSError:
+                        pass
                 if long_fmt and st is not None:
                     mtime = datetime.fromtimestamp(st.st_mtime).strftime("%Y-%m-%d %H:%M")
-                    size = st.st_size if e.is_file() else 0
-                    kind = "d" if e.is_dir() else "-"
-                    lines.append(f"{kind} {size:>12}  {mtime}  {e.name}")
+                    size = 0 if ent_isdir(e) else st.st_size
+                    kind = "d" if ent_isdir(e) else "-"
+                    lines.append(f"{kind} {size:>12}  {mtime}  {ent_name(e)}")
                 else:
-                    lines.append(e.name)
+                    lines.append(ent_name(e))
         else:
             # Columnar: fit names in ~80 cols (or 4 columns min)
-            names = [e.name for e in entries]
+            names = [ent_name(e) for e in entries]
             col_width = max(len(n) for n in names) + 2 if names else 0
             try:
                 term_width = os.get_terminal_size().columns
@@ -378,9 +469,22 @@ def run_builtin_command(name: str, args: list[str]) -> str | int | None:
         Output string, exit code (int), or None if name is not a builtin.
     """
     if name == "cd":
-        path = args[0] if args else ""
+        path = " ".join(args).strip() if args else ""
         if path:
-            os.chdir(path)
+            path = os.path.expanduser(path)
+            try:
+                os.chdir(path)
+            except FileNotFoundError:
+                # If relative path not found (e.g. "Application Data" from OneDrive),
+                # try under home (e.g. ~/Application Data).
+                if os.sep not in path and os.path.altsep not in (path or ""):
+                    home_path = os.path.join(os.path.expanduser("~"), path)
+                    if os.path.isdir(home_path):
+                        os.chdir(home_path)
+                    else:
+                        raise
+                else:
+                    raise
         else:
             os.chdir(os.path.expanduser("~"))
         return ""

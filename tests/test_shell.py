@@ -73,6 +73,51 @@ class TestAliasExpansion(unittest.TestCase):
         self.assertIn(expanded, ("a", "b"))
 
 
+class TestPromptWithSpaces(unittest.TestCase):
+    """Prompt containing spaces (e.g. cwd 'Local Settings') must not be truncated when displayed."""
+
+    def test_fallback_writes_full_prompt_and_does_not_pass_prompt_to_input(self):
+        """When msvcrt is None, fallback must write the full prompt and call input() with no arg.
+
+        Passing the prompt to input() causes readline/C runtime to truncate at the first space,
+        so we write the prompt ourselves and then call input() so the full prompt is displayed.
+        """
+        from pyshell import shell as shell_module
+        shell = Shell()
+        prompt_with_space = "[Local Settings] >>> "
+        with unittest.mock.patch.object(shell_module, "msvcrt", None):
+            with unittest.mock.patch("builtins.input", side_effect=EOFError()) as mock_input:
+                with unittest.mock.patch.object(
+                    shell_module.sys.stdout, "write", wraps=shell_module.sys.stdout.write
+                ) as mock_write:
+                    try:
+                        shell._read_line_fallback(prompt_with_space)
+                    except EOFError:
+                        pass
+        # Must have written the full prompt ourselves (so it is not truncated by input())
+        mock_write.assert_any_call(prompt_with_space)
+        # Must not pass the prompt to input() so the C layer never truncates it
+        mock_input.assert_called_once()
+        self.assertEqual(
+            mock_input.call_args[0], (), "input() must be called with no arguments so prompt is not truncated"
+        )
+
+    def test_prompt_with_cwd_containing_space_shows_full_basename(self):
+        """After cd into a dir with a space, get_prompt() includes the full basename."""
+        import tempfile
+        from pyshell.executor import Executor
+        start = os.getcwd()
+        with tempfile.TemporaryDirectory(prefix="pyshell test ") as tmpdir:
+            try:
+                os.chdir(tmpdir)
+                ex = Executor()
+                p = ex.get_prompt()
+                base = os.path.basename(tmpdir)
+                self.assertIn(base, p, f"Prompt {p!r} should contain full basename {base!r}")
+            finally:
+                os.chdir(start)
+
+
 class TestStartupConfig(unittest.TestCase):
     """Startup config .pyshellrc is run at REPL start."""
 

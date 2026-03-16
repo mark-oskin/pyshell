@@ -6,7 +6,7 @@ import tempfile
 import unittest
 
 from pyshell.executor import Executor
-from pyshell.builtins import run_builtin_command
+from pyshell.builtins import run_builtin_command, run_ls_dir
 
 
 class TestRunPython(unittest.TestCase):
@@ -59,9 +59,36 @@ class TestRunBuiltinCommand(unittest.TestCase):
         finally:
             os.chdir(start)
 
+    def test_cd_with_space_in_path(self):
+        """cd works when path has a space (args passed as separate tokens)."""
+        start = os.getcwd()
+        with tempfile.TemporaryDirectory(prefix="pyshell test ") as tmpdir:
+            try:
+                run_builtin_command("cd", tmpdir.split())
+                self.assertEqual(os.getcwd(), tmpdir)
+            finally:
+                os.chdir(start)
+
     def test_unknown_is_none(self):
         result = run_builtin_command("nonexistent_builtin_xyz", [])
         self.assertIsNone(result)
+
+    def test_ls_with_space_in_path(self):
+        """ls works when path has a space and is passed as separate tokens (e.g. unquoted 'ls My Folder')."""
+        start = os.getcwd()
+        with tempfile.TemporaryDirectory(prefix="pyshell test ") as parent:
+            try:
+                os.chdir(parent)
+                dir_with_space = os.path.join(parent, "My Folder")
+                os.mkdir(dir_with_space)
+                with open(os.path.join(dir_with_space, "file.txt"), "w") as f:
+                    f.write("x")
+                # Simulate argv when user types "ls My Folder" (no quotes) -> two tokens
+                out = run_ls_dir(["ls", "My", "Folder"])
+                self.assertIn("file.txt", out)
+                self.assertNotIn("No such file", out)
+            finally:
+                os.chdir(start)
 
 
 class TestRunCommand(unittest.TestCase):
@@ -71,6 +98,25 @@ class TestRunCommand(unittest.TestCase):
         ex = Executor()
         result = ex.run_command(["pwd"])
         self.assertEqual(result, os.getcwd())
+
+    @unittest.skipUnless(os.name == "nt", "ls/dir builtin only on Windows")
+    def test_ls_dir_with_space_in_path_via_run_command(self):
+        """On Windows, 'ls My Folder' (two tokens) lists directory 'My Folder' when it exists."""
+        ex = Executor()
+        ex.set_exit_callback(lambda code: None)
+        start = os.getcwd()
+        with tempfile.TemporaryDirectory(prefix="pyshell test ") as parent:
+            try:
+                os.chdir(parent)
+                dir_with_space = os.path.join(parent, "My Folder")
+                os.mkdir(dir_with_space)
+                with open(os.path.join(dir_with_space, "a.txt"), "w") as f:
+                    f.write("a")
+                result = ex.run_command(["ls", "My", "Folder"])
+                self.assertIn("a.txt", result or "")
+                self.assertEqual(ex._last_exit_code, 0)
+            finally:
+                os.chdir(start)
 
     def test_nonexistent_command_exits_127(self):
         ex = Executor()
@@ -117,6 +163,20 @@ class TestRunCommand(unittest.TestCase):
         self.assertNotIn("{base}", p)
         ex.set_prompt(None)
         self.assertIn(">>>", ex.get_prompt())
+
+    def test_prompt_with_cwd_containing_space(self):
+        """Prompt shows full directory name when cwd has a space (space-like char in path)."""
+        start = os.getcwd()
+        with tempfile.TemporaryDirectory(prefix="pyshell test ") as tmpdir:
+            try:
+                os.chdir(tmpdir)
+                ex = Executor()
+                p = ex.get_prompt()
+                # Base name is like "pyshell test abc123"
+                base = os.path.basename(tmpdir)
+                self.assertIn(base, p)
+            finally:
+                os.chdir(start)
 
     def test_alias_command_sets_and_lists(self):
         ex = Executor()

@@ -114,7 +114,11 @@ class Executor:
         self._namespace["last_exit_code"] = code
 
     def get_prompt(self) -> str:
-        """Return the current REPL prompt string with placeholders expanded."""
+        """Return the current REPL prompt string with placeholders expanded.
+
+        The shell always writes this prompt itself (never passes it to readline),
+        so paths (cwd, base) use normal space and display correctly.
+        """
         try:
             cwd = os.getcwd()
             base = os.path.basename(cwd)
@@ -123,17 +127,19 @@ class Executor:
         except OSError:
             cwd = ""
             base = ""
+        cwd_display = cwd
+        base_display = base
         user = os.environ.get("USER") or os.environ.get("USERNAME") or ""
         hostname = socket.gethostname() if socket else ""
         time_str = datetime.now().strftime("%H:%M:%S")
         exit_str = str(self._last_exit_code)
         jobs_str = str(len(self._jobs))
         if self._prompt is not None:
-            s = self._prompt.replace("{cwd}", cwd).replace("{base}", base)
+            s = self._prompt.replace("{cwd}", cwd_display).replace("{base}", base_display)
             s = s.replace("{user}", user).replace("{hostname}", hostname)
             s = s.replace("{time}", time_str).replace("{exit}", exit_str).replace("{jobs}", jobs_str)
             return s
-        return f"[{base}] >>> "
+        return f"[{base_display}] >>> "
 
     def run_python(self, source: str, original_line: str) -> Any:
         """Execute Python source in the shell namespace.
@@ -274,7 +280,7 @@ class Executor:
         if name == "pushd":
             cwd = os.getcwd()
             if args:
-                path = expand_command_argv([args[0]], self._get_namespace())[0]
+                path = expand_command_argv([" ".join(args)], self._get_namespace())[0]
                 path = os.path.expanduser(path)
                 if not os.path.isdir(path):
                     print(f"pyshell: pushd: {path}: Not a directory", file=sys.stderr)

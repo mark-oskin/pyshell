@@ -69,7 +69,7 @@ pyshell is a command-line shell that accepts both **Python-like code** and **she
 
 ### 4.2 Commands
 
-- **executor.run_command**: Expand argv and redirect paths (expansion module); then: builtins (type, which, cd, pwd, exit, alias, jobs, fg, bg, prompt, pushd, popd, dirs, source, history, true, false, mkdir, and on Windows ls/dir/cat/echo) are handled inline; else **builtins.run_builtin_command** for Python-callable builtins; else resolve command via PATH and run subprocess. Redirects applied by `_apply_redirects` (files or here-string pipe for `<<<`).
+- **executor.run_command**: Expand argv and redirect paths (expansion module); then: builtins (type, which, cd, pwd, exit, alias, jobs, fg, bg, prompt, pushd, popd, dirs, source, history, true, false, mkdir, and on Windows ls/dir/cat/echo) are handled inline; else **builtins.run_builtin_command** for Python-callable builtins; else resolve command via PATH and run subprocess. Redirects applied by `_apply_redirects` (files or here-string pipe for `<<<`). **cd** and **pushd** treat all arguments as a single path (joined by spaces) so directories with spaces work whether quoted or not. **get_prompt** returns the prompt with placeholders expanded; paths (cwd, base) use normal space and come from `os.getcwd()` (symlinks are resolved, so the prompt shows the target directory name). The shell **always** uses the **fallback** line reader for the main prompt: it writes the full prompt with `sys.stdout.write` then calls `input()` with no argument, so readline never receives the prompt and cannot truncate it (GNU readline on Linux/WSL truncates the prompt at the first space).
 
 ### 4.3 Redirects
 
