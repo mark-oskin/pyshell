@@ -243,6 +243,33 @@ class TestBackgroundJobs(unittest.TestCase):
         ex._jobs[0]["procs"][0].wait()
         ex._jobs.clear()
 
+    def test_get_jobs_returns_snapshot(self):
+        ex = Executor()
+        ex.set_exit_callback(lambda code: None)
+        self.assertEqual(ex.get_jobs(), [])
+        ex.run_command([sys.executable, "-c", "import time; time.sleep(0.1)"], background=True)
+        jobs = ex.get_jobs()
+        self.assertEqual(len(jobs), 1)
+        self.assertIn("id", jobs[0])
+        self.assertIn("cmd", jobs[0])
+        self.assertIn("status", jobs[0])
+        self.assertIn("pid", jobs[0])
+        self.assertIn("running", jobs[0]["status"])
+        ex._jobs[0]["procs"][0].wait()
+        ex._jobs.clear()
+
+    def test_kill_builtin_accepts_job_spec(self):
+        ex = Executor()
+        ex.set_exit_callback(lambda code: None)
+        ex.run_command([sys.executable, "-c", "import time; time.sleep(10)"], background=True)
+        self.assertEqual(len(ex._jobs), 1)
+        job_id = ex._jobs[0]["id"]
+        ex.run_command(["kill", "%" + str(job_id)])
+        # Process should be gone (or exit code 1 if already reaped)
+        ex._jobs[0]["procs"][0].wait(timeout=2)
+        self.assertIn(ex._last_exit_code, (0, 1))
+        ex._jobs.clear()
+
 
 class TestJobControlSuspend(unittest.TestCase):
     """Suspend (Ctrl+Z) and job control: available on Unix with TTY, not on Windows."""

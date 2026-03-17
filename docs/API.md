@@ -24,17 +24,23 @@ Quick index of modules and functions for navigation and tooling. Use “Search i
 
 ### Class: ShellHelper
 
-Exposed as `shell` in the Python namespace.
+Exposed as `shell` in the Python namespace. **Script API** for Python code and pyshell scripts (see also `help('shell')` in the REPL).
 
 | Method | Description |
 |--------|-------------|
-| **run(cmd)** → int | Run one shell command line; return exit code. |
+| **run(cmd, background=False)** → int | Run one shell command line; return exit code. background=True runs in background (adds to job list). |
 | **capture(cmd)** → tuple[str, int] | Run command, return (stdout string, exit code). |
 | **cd(path)** | Change directory; no args = home. |
 | **pwd()** → str | Current working directory. |
 | **pushd(path)** | Push cwd onto stack, cd to path; no path = swap. |
 | **popd()** | Pop directory from stack and cd to it. |
 | **dirs()** → str | Directory stack (cwd + pushd) as string. |
+| **jobs()** → list[dict] | List of jobs: id, cmd, status ('running'\|'stopped'\|'done'), pid. |
+| **fg(spec=None)** → int | Bring job to foreground; spec None or '%n'. Blocks until job finishes. |
+| **bg(spec=None)** → int | Resume stopped job in background; spec None or '%n'. |
+| **kill(\*args)** → int | Send signal to process/job. E.g. kill('%1'), kill('-9', '%1'). |
+| **exit_code()** → int | Exit code of last command or pipeline. |
+| **prompt(template=None)** → str | Get current prompt, or set prompt if template given (then return ''). |
 
 ### Class: Shell
 
@@ -98,9 +104,29 @@ Exposed as `shell` in the Python namespace.
 | **_get_namespace()** → dict | Namespace for Python (env, builtins, last_exit_code, shell). |
 | **_set_exit_code(code)** | Set _last_exit_code and namespace["last_exit_code"]. |
 | **get_prompt()** → str | Current prompt string (placeholders expanded). |
+| **get_jobs()** → list[dict] | Snapshot of job list: id, cmd, status ('running'\|'stopped'\|'done'), pid. |
 | **run_python(source, original_line)** | Execute Python source; return value for expressions. |
 | **run_command(argv, redirects, background)** | Run one command (builtin or external). |
 | **run_pipeline(segments, redirects, background)** | Run pipeline; redirects on last stage. |
+
+#### Jobs and job control
+
+- **Starting jobs**  
+  - **Foreground**: `run_command(argv, redirects, background=False)` (default). Runs the command and waits; on Unix with a TTY, Ctrl+Z suspends it and adds it to the job list.  
+  - **Background**: `run_command(argv, redirects, background=True)` or `run_pipeline(..., background=True)`. Starts the command (or last stage) in the background and adds it to the job list; returns immediately.
+
+- **Listing jobs**  
+  - **Shell**: `jobs` builtin prints id, pid, status (running/stopped/done), and command.  
+  - **API**: `get_jobs()` returns a list of dicts with `id`, `cmd`, `status`, `pid` for programmatic use.
+
+- **Job control (shell builtins)**  
+  - **fg [%jobid]** — Bring a job to the foreground; wait for it. Optional `%n` selects job by id; no arg = most recent. On Unix, sends SIGCONT if the job was stopped and restores the terminal.  
+  - **bg [%jobid]** — Resume a stopped job in the background (sends SIGCONT). Optional `%n` selects job; no arg = most recent.  
+  - **kill [-signal] pid | %jobid [...]** — Send a signal (default SIGTERM) to process(es) or job(s). E.g. `kill -9 %1`, `kill %1`.
+
+- **Platform**  
+  - **Unix (TTY)**: Full job control (suspend with Ctrl+Z, fg/bg with terminal handoff).  
+  - **Windows**: Background jobs and `fg` (wait) work; no suspend (Ctrl+Z) or process-group signals.
 
 ### Module-level functions
 
@@ -109,9 +135,10 @@ Exposed as `shell` in the Python namespace.
 | **_safe_stdin()** | stdin for subprocess; DEVNULL if no fileno. |
 | **_has_fileno(stream)** → bool | True if stream has fileno(). |
 | **_apply_redirects(redirects)** → tuple | (stdout_f, stderr_f, stdin_f, stderr_to_stdout). |
-| **_run_builtin_jobs(jobs)** | Print job list. |
-| **_run_builtin_fg(jobs, set_exit_code)** | Wait for last job, set exit code. |
-| **_run_builtin_bg(jobs)** | No-op for already-running jobs. |
+| **_run_builtin_jobs(jobs)** | Print job list (id, pid, status, cmd). |
+| **_run_builtin_fg(jobs, set_exit_code, job_spec)** | Bring job to foreground; job_spec None or '%n'. |
+| **_run_builtin_bg(jobs, job_spec)** | Resume stopped job in background; returns 'ok'\|'no_job'\|'not_stopped'. |
+| **_run_builtin_kill(args, jobs, set_exit_code)** | kill [-signal] pid \| %jobid [...]. |
 | **_is_expression_statement(tree)** → bool | True if AST is single expression. |
 | **_is_bare_name(tree)** → bool | True if AST is single Name. |
 | **_resolve_command_argv(argv)** → list \| None | Resolve command via PATH; None if not found. |

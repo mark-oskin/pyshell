@@ -34,7 +34,7 @@ Redirects = list[tuple[str, str | None]]
 
 BUILTIN_NAMES = frozenset({
     "cd", "pwd", "exit", "env", "run", "run_capture", "history", "alias", "unalias",
-    "prompt", "help", "jobs", "fg", "bg", "pushd", "popd", "dirs", "source", "type", "which",
+    "prompt", "help", "jobs", "fg", "bg", "kill", "pushd", "popd", "dirs", "source", "type", "which",
     "true", "false", "mkdir",
 }) | (frozenset({"ls", "dir", "cat", "echo"}) if os.name == "nt" else frozenset())
 
@@ -141,6 +141,24 @@ class Executor:
             s = s.replace("{time}", time_str).replace("{exit}", exit_str).replace("{jobs}", jobs_str)
             return s
         return f"[{base_display}] >>> "
+
+    def get_jobs(self) -> list[dict[str, Any]]:
+        """Return a snapshot of the job list for programmatic use.
+
+        Each entry is a dict with: id (int), cmd (str), status ('running'|'stopped'|'done'), pid (int or None).
+        Does not expose internal process objects.
+        """
+        result = []
+        for j in self._jobs:
+            procs = j.get("procs", [])
+            pid = procs[0].pid if procs else None
+            result.append({
+                "id": j["id"],
+                "cmd": j.get("cmd", ""),
+                "status": _job_status(procs, pid),
+                "pid": pid,
+            })
+        return result
 
     def run_python(self, source: str, original_line: str) -> Any:
         """Execute Python source in the shell namespace.
@@ -269,11 +287,20 @@ class Executor:
             self._set_exit_code(0)
             return None
         if name == "fg":
-            return _run_builtin_fg(self._jobs, self._set_exit_code)
+            return _run_builtin_fg(self._jobs, self._set_exit_code, args[0] if args else None)
         if name == "bg":
-            _run_builtin_bg(self._jobs)
-            self._set_exit_code(0)
+            result = _run_builtin_bg(self._jobs, args[0] if args else None)
+            if result == "ok":
+                self._set_exit_code(0)
+            else:
+                if result == "no_job":
+                    print("pyshell: bg: no current job", file=sys.stderr)
+                else:
+                    print("pyshell: bg: job not stopped", file=sys.stderr)
+                self._set_exit_code(1)
             return None
+        if name == "kill":
+            return _run_builtin_kill(args or [], self._jobs, self._set_exit_code)
         if name == "prompt":
             self.set_prompt(" ".join(args) if args else None)
             self._set_exit_code(0)
@@ -397,15 +424,23 @@ class Executor:
         stdout_f, stderr_f, stdin_f, stderr_to_stdout = _apply_redirects(redirects)
         try:
             if background:
-                proc = subprocess.Popen(
-                    argv,
-                    shell=False,
-                    env=os.environ,
-                    stdout=stdout_f or subprocess.DEVNULL,
-                    stderr=stderr_f if not stderr_to_stdout else subprocess.STDOUT,
-                    stdin=stdin_f or subprocess.DEVNULL,
-                    start_new_session=True,
-                )
+                # Background job: on Unix, keep in same session but its own process group
+                # (preexec_fn=_child_own_process_group) so fg/bg and signals work.
+                # On Windows, use start_new_session for isolation (no job control).
+                popen_kwargs: dict[str, Any] = {
+                    "args": argv,
+                    "shell": False,
+                    "env": os.environ,
+                    "stdout": stdout_f or subprocess.DEVNULL,
+                    "stderr": stderr_f if not stderr_to_stdout else subprocess.STDOUT,
+                    "stdin": stdin_f or subprocess.DEVNULL,
+                    "text": True,
+                }
+                if os.name != "nt":
+                    popen_kwargs["preexec_fn"] = _child_own_process_group
+                else:
+                    popen_kwargs["start_new_session"] = True
+                proc = subprocess.Popen(**popen_kwargs)  # type: ignore[arg-type]
                 job_id = self._next_job_id
                 self._next_job_id += 1
                 job = {"id": job_id, "procs": [proc], "cmd": " ".join(argv)}
@@ -699,6 +734,35 @@ def _process_stopped(pid: int) -> bool:
         return False
 
 
+def _job_status(procs: list, pid: int | None) -> str:
+    """Return 'running', 'stopped', or 'done' for a job's first process."""
+    if not procs or pid is None:
+        return "done"
+    poll = procs[0].poll()
+    if poll is None:
+        return "stopped" if (hasattr(os, "WIFSTOPPED") and _process_stopped(pid)) else "running"
+    return "done"
+
+
+def _find_job(jobs: list, spec: str | None) -> tuple[dict[str, Any] | None, int]:
+    """Resolve job spec to (job, index). spec: None or '' = last; '%n' or 'n' = job id n. Index -1 if not found."""
+    if not jobs:
+        return (None, -1)
+    if not spec or spec.strip() == "":
+        return (jobs[-1], len(jobs) - 1)
+    s = spec.strip()
+    if s.startswith("%"):
+        s = s[1:].strip()
+    try:
+        jid = int(s)
+    except ValueError:
+        return (None, -1)
+    for i, j in enumerate(jobs):
+        if j.get("id") == jid:
+            return (j, i)
+    return (None, -1)
+
+
 def _child_own_process_group() -> None:
     """Run in child before exec: put process in its own process group (same session).
     So the parent can tcsetpgrp(tty, pid) and Ctrl+Z goes to the child.
@@ -810,25 +874,21 @@ def _run_builtin_jobs(jobs: list) -> None:
     for j in jobs:
         procs = j.get("procs", [])
         pid = procs[0].pid if procs else "?"
-        poll = procs[0].poll() if procs else None
-        if poll is None:
-            status = "running"
-        elif hasattr(os, "WIFSTOPPED") and procs[0].pid and _process_stopped(procs[0].pid):
-            status = "stopped"
-        else:
-            status = "done"
+        status = _job_status(procs, procs[0].pid if procs else None)
         print(f"[{j['id']}] {pid} {status} {j.get('cmd', '')}")
 
 
-def _run_builtin_fg(jobs: list, set_exit_code: Any) -> None:
-    """Bring the most recent job to foreground; wait and set exit code.
+def _run_builtin_fg(jobs: list, set_exit_code: Any, job_spec: str | None = None) -> None:
+    """Bring a job to foreground; wait and set exit code.
+    job_spec: None or '' = most recent; '%n' or 'n' = job id n.
     On Unix with job control, give terminal to job's process group and send SIGCONT if stopped.
     """
-    if not jobs:
-        print("pyshell: fg: no current job", file=sys.stderr)
+    job, idx = _find_job(jobs, job_spec)
+    if job is None or idx < 0:
+        print("pyshell: fg: no such job", file=sys.stderr)
         set_exit_code(1)
         return
-    job = jobs.pop()
+    jobs.pop(idx)
     procs = job.get("procs", [])
     if not procs:
         set_exit_code(1)
@@ -844,11 +904,20 @@ def _run_builtin_fg(jobs: list, set_exit_code: Any) -> None:
         except (AttributeError, ValueError):
             pass
         try:
-            os.tcsetpgrp(tty_fd, pgid)
             try:
-                os.kill(-pgid, signal.SIGCONT)
-            except (ProcessLookupError, OSError):
-                pass
+                os.tcsetpgrp(tty_fd, pgid)
+                try:
+                    os.kill(-pgid, signal.SIGCONT)
+                except (ProcessLookupError, OSError):
+                    pass
+            except OSError:
+                # Cannot take terminal / change foreground group (e.g. different session);
+                # fall back to waiting without job-control handoff.
+                if old_sigttou is not None:
+                    signal.signal(signal.SIGTTOU, old_sigttou)
+                proc.wait()
+                set_exit_code(proc.returncode if proc.returncode is not None else 0)
+                return
         finally:
             if old_sigttou is not None:
                 signal.signal(signal.SIGTTOU, old_sigttou)
@@ -879,11 +948,108 @@ def _run_builtin_fg(jobs: list, set_exit_code: Any) -> None:
             pass
 
 
-def _run_builtin_bg(jobs: list) -> None:
-    for j in jobs:
-        for p in j.get("procs", []):
-            if p.poll() is None:
-                pass  # already running; no op for bg on running job
+def _run_builtin_bg(jobs: list, job_spec: str | None = None) -> str:
+    """Resume a stopped job in the background. job_spec: None or '' = most recent; '%n' or 'n' = job id n.
+    On Unix sends SIGCONT to the job's process group. Returns 'ok', 'no_job', or 'not_stopped'."""
+    job, _ = _find_job(jobs, job_spec)
+    if job is None:
+        return "no_job"
+    procs = job.get("procs", [])
+    if not procs:
+        return "no_job"
+    pid = procs[0].pid
+    status = _job_status(procs, pid)
+    if status != "stopped":
+        return "not_stopped"
+    pgid = job.get("pgid", pid)
+    if os.name != "nt" and pgid is not None:
+        try:
+            os.kill(-pgid, signal.SIGCONT)
+        except (ProcessLookupError, OSError):
+            pass
+    return "ok"
+
+
+def _parse_kill_signal(s: str) -> int | None:
+    """Parse a signal spec (e.g. '9', 'KILL', 'SIGTERM') to signal number. None if invalid."""
+    s = s.strip().upper()
+    if s.startswith("SIG"):
+        s = s[3:]
+    if not s:
+        return None
+    try:
+        return int(s)
+    except ValueError:
+        pass
+    name = "SIG" + s
+    if hasattr(signal, name):
+        return int(getattr(signal, name))
+    return None
+
+
+def _run_builtin_kill(args: list[str], jobs: list, set_exit_code: Any) -> None:
+    """kill [-signal] pid | %jobid [...]. Default signal is SIGTERM."""
+    sig = signal.SIGTERM
+    targets = []
+    i = 0
+    while i < len(args):
+        a = args[i]
+        if a.startswith("-"):
+            spec = a[1:].lstrip()
+            if spec and (parsed := _parse_kill_signal(spec)) is not None:
+                sig = parsed
+                i += 1
+                continue
+        targets.append(a)
+        i += 1
+    if not targets:
+        print("pyshell: kill: usage: kill [-signal] pid | %jobid [...]", file=sys.stderr)
+        set_exit_code(1)
+        return
+    any_fail = False
+    for t in targets:
+        t = t.strip()
+        if t.startswith("%"):
+            try:
+                jid = int(t[1:].strip())
+            except ValueError:
+                print(f"pyshell: kill: invalid job id: {t}", file=sys.stderr)
+                any_fail = True
+                continue
+            job, _ = _find_job(jobs, t)
+            if job is None:
+                print(f"pyshell: kill: {t}: no such job", file=sys.stderr)
+                any_fail = True
+                continue
+            procs = job.get("procs", [])
+            if not procs:
+                any_fail = True
+                continue
+            pgid = job.get("pgid", procs[0].pid)
+            pid_or_pgid = -pgid if (os.name != "nt" and pgid is not None) else procs[0].pid
+            try:
+                os.kill(pid_or_pgid, sig)
+            except ProcessLookupError:
+                any_fail = True
+            except OSError as e:
+                print(f"pyshell: kill: {e}", file=sys.stderr)
+                any_fail = True
+        else:
+            try:
+                pid = int(t)
+            except ValueError:
+                print(f"pyshell: kill: invalid pid: {t}", file=sys.stderr)
+                any_fail = True
+                continue
+            try:
+                os.kill(pid, sig)
+            except ProcessLookupError:
+                print(f"pyshell: kill: {pid}: no such process", file=sys.stderr)
+                any_fail = True
+            except OSError as e:
+                print(f"pyshell: kill: {e}", file=sys.stderr)
+                any_fail = True
+    set_exit_code(1 if any_fail else 0)
 
 
 def _is_expression_statement(tree: ast.AST) -> bool:

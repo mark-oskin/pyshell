@@ -17,7 +17,7 @@ if TYPE_CHECKING:
 # One-line description for every builtin (shell command or Python callable)
 BUILTIN_HELP: dict[str, str] = {
     "alias": "List or define command aliases. alias, alias name=value, alias name",
-    "bg": "Resume a background job.",
+    "bg": "Resume a stopped job in the background. bg [%jobid]",
     "cd": "Change current directory. No args = home.",
     "dirs": "Print the directory stack (cwd and pushd stack).",
     "env": "Print environment variables.",
@@ -25,7 +25,7 @@ BUILTIN_HELP: dict[str, str] = {
     "fg": "Bring a background job to the foreground.",
     "help": "List builtins or show help for a builtin. help [topic]",
     "history": "Show command history.",
-    "jobs": "List background jobs.",
+    "jobs": "List background/stopped jobs (id, pid, status, cmd).",
     "popd": "Pop directory from stack and cd to it.",
     "prompt": "Set the REPL prompt. Use {cwd}, {base}, {user}, {hostname}, {time}, {exit}, {jobs}. prompt() = default.",
     "pushd": "Push cwd onto stack and cd to dir; no arg = swap cwd with top.",
@@ -47,6 +47,7 @@ if os.name == "nt":
 BUILTIN_HELP["true"] = "Do nothing; exit with code 0."
 BUILTIN_HELP["false"] = "Do nothing; exit with code 1."
 BUILTIN_HELP["mkdir"] = "Create directory. mkdir [-p] path... (creates parents with -p)."
+BUILTIN_HELP["kill"] = "Send signal to process or job. kill [-signal] pid | %jobid [...]. Default: SIGTERM."
 
 # Extended help for documentation topics (help('prompt'), help('quoting'), help('windows'))
 EXTENDED_HELP: dict[str, str] = {
@@ -84,6 +85,35 @@ Examples:
     at startup (same path on Windows: your user profile directory).
   • Commands: On Windows, ls, dir, cat, and echo are built in when not on PATH.
     On Unix they are run from PATH. mkdir -p is built in on all platforms.""",
+    "shell": """Script API: the `shell` object (use from Python or scripts):
+
+  Running commands:
+    shell.run(cmd)              Run one shell command line; returns exit code.
+    shell.run(cmd, background=True)  Run in background (adds to job list).
+    shell.capture(cmd)           Run and capture stdout; returns (output_str, exit_code).
+
+  Directories:
+    shell.cd(path), shell.pwd(), shell.pushd(path), shell.popd(), shell.dirs()
+
+  Jobs and job control:
+    shell.jobs()                List of dicts: id, cmd, status ('running'|'stopped'|'done'), pid.
+    shell.fg()                  Bring most recent job to foreground; blocks until it finishes.
+    shell.fg('%1')              Bring job 1 to foreground.
+    shell.bg()                  Resume most recent stopped job in background.
+    shell.bg('%1')              Resume job 1 in background.
+    shell.kill('%1')            Send SIGTERM to job 1.
+    shell.kill('-9', '%1')      Send SIGKILL to job 1.
+    shell.kill('12345')         Send SIGTERM to process 12345.
+
+  Other:
+    shell.exit_code()           Last command/pipeline exit code.
+    shell.prompt()              Current prompt string.
+    shell.prompt(template)      Set prompt; placeholders: {cwd}, {base}, {user}, {exit}, {jobs}, etc.
+
+  Example (script):
+    shell.run('sleep 10', background=True)
+    print(shell.jobs())
+    shell.fg()""",
 }
 
 
@@ -431,9 +461,9 @@ def make_builtins(
             for name in sorted(BUILTIN_HELP.keys()):
                 lines.append(f"  {name:<12} {BUILTIN_HELP[name]}")
             lines.append("")
-            lines.append("Extended docs: help('prompt'), help('quoting'), help('windows')")
+            lines.append("Extended docs: help('prompt'), help('quoting'), help('windows'), help('shell')")
             lines.append("")
-            lines.append("Python: assignments, expressions, print(), etc. shell.run(cmd), shell.capture(cmd), shell.cd/pwd/pushd/popd/dirs.")
+            lines.append("Python: expressions, print(), etc. shell.run(cmd), shell.capture(cmd), shell.jobs/fg/bg/kill, shell.cd/pwd/pushd/popd/dirs. help('shell') for script API.")
             lines.append("External commands: type name and args.")
             return "\n".join(lines)
         if topic in EXTENDED_HELP:

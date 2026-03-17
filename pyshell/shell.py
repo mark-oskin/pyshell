@@ -92,17 +92,23 @@ def main() -> int:
 class ShellHelper:
     """Helper exposed as `shell` in the Python namespace.
 
-    Provides run(cmd), capture(cmd), cd, pwd, pushd, popd, dirs for use
-    from Python code or scripts.
+    Provides run(cmd), capture(cmd), cd, pwd, pushd, popd, dirs, jobs, fg, bg, kill,
+    exit_code, and prompt for use from Python code or scripts.
     """
 
     def __init__(self, shell: "Shell") -> None:
         """Store reference to the Shell instance."""
         self._shell = shell
 
-    def run(self, cmd: str) -> int:
-        """Run one shell command line. Returns exit code."""
-        self._shell._eval(cmd)
+    def run(self, cmd: str, background: bool = False) -> int:
+        """Run one shell command line. Returns exit code.
+
+        If background is True, runs the command in the background (adds to job list).
+        """
+        line = cmd.strip()
+        if background and line and not line.endswith("&"):
+            line = line + " &"
+        self._shell._eval(line)
         return self._shell.executor._last_exit_code
 
     def capture(self, cmd: str) -> tuple[str, int]:
@@ -130,6 +136,38 @@ class ShellHelper:
         """Return directory stack (cwd and pushd stack) as a string."""
         result = self._shell.executor.run_command(["dirs"])
         return result if isinstance(result, str) else ""
+
+    def jobs(self) -> list[dict]:
+        """Return list of jobs. Each dict has id, cmd, status ('running'|'stopped'|'done'), pid."""
+        return self._shell.executor.get_jobs()
+
+    def fg(self, spec: str | None = None) -> int:
+        """Bring a job to the foreground; wait for it. spec: None or '%n' (e.g. '%1'). Returns exit code."""
+        argv = ["fg", spec] if spec else ["fg"]
+        self._shell.executor.run_command(argv)
+        return self._shell.executor._last_exit_code
+
+    def bg(self, spec: str | None = None) -> int:
+        """Resume a stopped job in the background. spec: None or '%n'. Returns exit code (0 on success)."""
+        argv = ["bg", spec] if spec else ["bg"]
+        self._shell.executor.run_command(argv)
+        return self._shell.executor._last_exit_code
+
+    def kill(self, *args: str) -> int:
+        """Send signal to process or job. E.g. kill('%1'), kill('-9', '%1'), kill('12345'). Returns exit code."""
+        self._shell.executor.run_command(["kill"] + list(args))
+        return self._shell.executor._last_exit_code
+
+    def exit_code(self) -> int:
+        """Return the exit code of the last run command or pipeline."""
+        return self._shell.executor._last_exit_code
+
+    def prompt(self, template: str | None = None) -> str:
+        """Get or set the REPL prompt. prompt() returns current prompt; prompt(template) sets it and returns ''."""
+        if template is not None:
+            self._shell.executor.set_prompt(template)
+            return ""
+        return self._shell.executor.get_prompt()
 
 
 def _print_usage() -> None:
@@ -398,11 +436,17 @@ class Shell:
             pass
 
     def _setup_completion(self) -> None:
-        """Register tab completer with readline."""
+        """Register tab completer and fix backspace binding for readline."""
         if readline is None:
             return
         readline.set_completer(self._completer)
         readline.parse_and_bind("tab: complete")
+        # WSL2/Linux: ensure Backspace and DEL both delete backward (avoid \r / prompt wipe).
+        try:
+            readline.parse_and_bind(r'"\C-h": backward-delete-char')   # Ctrl+H (Backspace on some terms)
+            readline.parse_and_bind(r'"\C-?": backward-delete-char')   # DEL (Backspace on many terms)
+        except (TypeError, ValueError):
+            pass
 
     def _completer(self, text: str, state: int):
         """Readline completer: (text, state) -> next completion or None."""
@@ -446,7 +490,7 @@ class Shell:
                         if k not in ("PATH",) or var_prefix:
                             completions.append("$" + k)
             elif not (raw_word and raw_word.startswith("$")):
-                builtins = ["cd", "pwd", "exit", "env", "run", "run_capture", "history", "alias", "unalias", "prompt", "help", "jobs", "fg", "bg", "pushd", "popd", "dirs", "type", "which", "source"]
+                builtins = ["cd", "pwd", "exit", "env", "run", "run_capture", "history", "alias", "unalias", "prompt", "help", "jobs", "fg", "bg", "kill", "pushd", "popd", "dirs", "type", "which", "source"]
                 if os.name == "nt":
                     builtins = builtins + ["ls", "dir", "cat", "echo"]
                 for b in builtins:
@@ -652,11 +696,11 @@ class Shell:
             Entered line or None on EOF (Ctrl+Z or Ctrl+D).
         """
         if msvcrt is None:
-            # Write prompt ourselves so it is not truncated (input(prompt) truncates at first space on many platforms).
+            # Unix/WSL: pass prompt to input() so readline knows prompt length; backspace then
+            # deletes only within the line instead of moving to BOL and wiping the prompt.
+            # (Backspace binding is set in _setup_completion.)
             try:
-                sys.stdout.write(prompt)
-                sys.stdout.flush()
-                return input()
+                return input(prompt)
             except EOFError:
                 return None
         # Windows: key-by-key with msvcrt, our own completion and history (Up/Down)

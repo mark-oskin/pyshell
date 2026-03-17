@@ -121,6 +121,23 @@ Environment and shell integration (env vars and `last_exit_code` are in the name
 1
 ```
 
+**Script API**: The `shell` object exposes the same machinery to Python and scripts. Use it for job control and for running commands with full shell parsing (redirects, `&`, etc.):
+
+```text
+>>> shell.run("sleep 5", background=True)
+0
+>>> shell.jobs()
+[{'id': 1, 'cmd': 'sleep 5', 'status': 'running', 'pid': 12345}]
+>>> shell.fg()                    # bring job to foreground; blocks until it finishes
+>>> shell.run("sleep 10 &")
+>>> shell.kill("%1")              # or shell.kill("-9", "%1")
+>>> shell.exit_code()
+0
+>>> shell.prompt("{base} $ ")
+```
+
+In the REPL, run `help('shell')` for the full script API (run, capture, jobs, fg, bg, kill, exit_code, prompt, cd, pwd, pushd, popd, dirs).
+
 Line continuation with `\` lets you split long lines:
 
 ```text
@@ -215,7 +232,7 @@ In Python at the prompt or in `.pyshellrc` / script files, these are available i
 | `help()`, `help('name')` | Short help for builtins. |
 | `last_exit_code` | Exit code of the last run command (0 on success, etc.). |
 | `PATH`, `HOME`, … | All environment variables are in the namespace (e.g. `print(PATH)`). |
-| `shell` | Helper object with `run()`, `capture()`, `cd()`, `pwd()`, `pushd()`, `popd()`, `dirs()` (see below). |
+| `shell` | Helper object: `run()`, `capture()`, `jobs()`, `fg()`, `bg()`, `kill()`, `exit_code()`, `prompt()`, `cd()`, `pwd()`, `pushd()`, `popd()`, `dirs()` (see below). Run `help('shell')` for the full script API. |
 
 ### Accessing shell functions from Python
 
@@ -268,8 +285,14 @@ The name **`shell`** in the namespace is a helper that lets you run **entire com
 
 | Method | Description |
 |--------|-------------|
-| `shell.run(cmd)` | Run one command line (e.g. `"ls -la"`, `"git status"`). Returns exit code. |
+| `shell.run(cmd, background=False)` | Run one command line. Returns exit code. Use `background=True` to run in background (adds to job list). |
 | `shell.capture(cmd)` | Run command line and capture stdout. Returns `(output_string, exit_code)`. |
+| `shell.jobs()` | List of jobs: each dict has `id`, `cmd`, `status` ('running'\|'stopped'\|'done'), `pid`. |
+| `shell.fg(spec=None)` | Bring job to foreground; blocks until it finishes. `spec` is `None` (most recent) or `'%1'`, etc. |
+| `shell.bg(spec=None)` | Resume a stopped job in the background. |
+| `shell.kill(*args)` | Send signal to process or job. E.g. `shell.kill('%1')`, `shell.kill('-9', '%1')`. |
+| `shell.exit_code()` | Exit code of the last command or pipeline. |
+| `shell.prompt(template=None)` | Get current prompt, or set it (e.g. `shell.prompt('{base} $ ')`). |
 | `shell.cd(path)` | Change directory; no args = home. |
 | `shell.pwd()` | Current working directory. |
 | `shell.pushd(path)` | Push cwd onto stack, cd to path; no path = swap with top. |
