@@ -33,7 +33,7 @@ Numbered for reference. Priorities are suggestions.
 
 ## Job / process control
 
-8. **Suspend (e.g. Ctrl+Z)** – Suspend foreground process and put in job list.
+8. **Suspend (e.g. Ctrl+Z)** – Suspend foreground process and put in job list. *(Done: Unix/Linux/WSL only; Windows has no suspend; unit tests for both.)*
 9. **Job control in pipelines** – Clarify or implement per-stage vs single job for pipelines.
 
 ---

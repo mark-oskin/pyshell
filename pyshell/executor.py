@@ -8,6 +8,7 @@ via run_command and run_pipeline. Redirects are applied in _apply_redirects.
 import ast
 import os
 import shutil
+import signal
 import subprocess
 import sys
 from datetime import datetime
@@ -407,7 +408,10 @@ class Executor:
                 )
                 job_id = self._next_job_id
                 self._next_job_id += 1
-                self._jobs.append({"id": job_id, "procs": [proc], "cmd": " ".join(argv)})
+                job = {"id": job_id, "procs": [proc], "cmd": " ".join(argv)}
+                if os.name != "nt":
+                    job["pgid"] = proc.pid
+                self._jobs.append(job)
                 print(f"[{job_id}] {proc.pid}")
                 self._set_exit_code(0)
                 return None
@@ -418,6 +422,22 @@ class Executor:
                 not stderr_to_stdout
                 and (stderr_f is None and not _has_fileno(sys.stderr))
             )
+            if (
+                _job_control_available()
+                and not use_pipe_stdout
+                and not use_pipe_stderr
+            ):
+                _, self._next_job_id = _run_foreground_with_job_control(
+                    argv,
+                    stdout_f,
+                    stderr_f,
+                    stdin_f,
+                    stderr_to_stdout,
+                    self._set_exit_code,
+                    self._jobs,
+                    self._next_job_id,
+                )
+                return None
             try:
                 proc = subprocess.run(
                     argv,
@@ -654,23 +674,203 @@ def _apply_redirects(redirects: Redirects) -> tuple[Any, Any, Any, bool]:
     return (stdout_f, stderr_f, stdin_f, stderr_to_stdout)
 
 
+def _job_control_available() -> bool:
+    """True if we can do suspend (Ctrl+Z) / job control: Unix with a TTY."""
+    if os.name == "nt":
+        return False
+    try:
+        return (
+            hasattr(os, "tcsetpgrp")
+            and hasattr(os, "WIFSTOPPED")
+            and sys.stdin.isatty()
+        )
+    except (OSError, AttributeError):
+        return False
+
+
+def _process_stopped(pid: int) -> bool:
+    """True if process pid is stopped (Unix only). Uses WNOHANG so does not reap."""
+    if not hasattr(os, "WIFSTOPPED"):
+        return False
+    try:
+        _, st = os.waitpid(pid, os.WNOHANG | os.WUNTRACED)
+        return os.WIFSTOPPED(st)
+    except (ChildProcessError, OSError):
+        return False
+
+
+def _child_own_process_group() -> None:
+    """Run in child before exec: put process in its own process group (same session).
+    So the parent can tcsetpgrp(tty, pid) and Ctrl+Z goes to the child.
+    """
+    os.setpgid(0, 0)
+
+
+def _restore_terminal_to_shell(tty_fd: int, shell_pgrp: int) -> None:
+    """Give the terminal back to the shell (call before returning to prompt)."""
+    old_sigttou = None
+    try:
+        old_sigttou = signal.signal(signal.SIGTTOU, signal.SIG_IGN)
+    except (AttributeError, ValueError):
+        pass
+    try:
+        os.tcsetpgrp(tty_fd, shell_pgrp)
+    finally:
+        if old_sigttou is not None:
+            signal.signal(signal.SIGTTOU, old_sigttou)
+
+
+def _run_foreground_with_job_control(
+    argv: list[str],
+    stdout_f: Any,
+    stderr_f: Any,
+    stdin_f: Any,
+    stderr_to_stdout: bool,
+    set_exit_code: Any,
+    jobs: list,
+    next_job_id: int,
+) -> tuple[bool, int]:
+    """Run a foreground command with job control; on Ctrl+Z (SIGTSTP) add to jobs.
+    Returns (used_job_control, next_job_id). Uses real stdout/stderr (no PIPE).
+    Child is kept in same session with its own process group so tcsetpgrp works.
+    """
+    tty_fd = sys.stdin.fileno()
+    shell_pgrp = os.getpgrp()
+    out_target = stdout_f or sys.stdout
+    err_target = subprocess.STDOUT if stderr_to_stdout else (stderr_f or sys.stderr)
+    # Child runs _child_own_process_group before exec so it's in its own pg (same session).
+    proc = subprocess.Popen(
+        argv,
+        shell=False,
+        env=os.environ,
+        stdout=out_target,
+        stderr=err_target,
+        stdin=stdin_f or _safe_stdin(),
+        text=True,
+        preexec_fn=_child_own_process_group if os.name != "nt" else None,
+    )
+    child_pgid = proc.pid
+    old_sigttou = None
+    try:
+        old_sigttou = signal.signal(signal.SIGTTOU, signal.SIG_IGN)
+    except (AttributeError, ValueError):
+        pass
+    try:
+        os.tcsetpgrp(tty_fd, child_pgid)
+    except OSError:
+        if old_sigttou is not None:
+            signal.signal(signal.SIGTTOU, old_sigttou)
+        proc.wait()
+        set_exit_code(proc.returncode if proc.returncode is not None else 0)
+        return (True, next_job_id)
+    if old_sigttou is not None:
+        signal.signal(signal.SIGTTOU, old_sigttou)
+
+    while True:
+        try:
+            _pid, status = os.waitpid(proc.pid, os.WUNTRACED)
+        except ChildProcessError:
+            break
+        if os.WIFSTOPPED(status):
+            job_id = next_job_id
+            next_job_id += 1
+            jobs.append({
+                "id": job_id,
+                "procs": [proc],
+                "cmd": " ".join(argv),
+                "pgid": child_pgid,
+            })
+            try:
+                old_sigttou = signal.signal(signal.SIGTTOU, signal.SIG_IGN)
+            except (AttributeError, ValueError):
+                old_sigttou = None
+            try:
+                os.tcsetpgrp(tty_fd, shell_pgrp)
+            finally:
+                if old_sigttou is not None:
+                    signal.signal(signal.SIGTTOU, old_sigttou)
+            print(f"[{job_id}]+  Stopped                 {' '.join(argv)}")
+            set_exit_code(146)  # 128 + 18 (SIGTSTP)
+            return (True, next_job_id)
+        if os.WIFEXITED(status):
+            _restore_terminal_to_shell(tty_fd, shell_pgrp)
+            code = os.WEXITSTATUS(status)
+            set_exit_code(code)
+            return (True, next_job_id)
+        if os.WIFSIGNALED(status):
+            _restore_terminal_to_shell(tty_fd, shell_pgrp)
+            sig = os.WTERMSIG(status)
+            set_exit_code(128 + sig)
+            return (True, next_job_id)
+    return (True, next_job_id)
+
+
 def _run_builtin_jobs(jobs: list) -> None:
     """Print the list of background jobs (id, pid, status, cmd)."""
     for j in jobs:
         procs = j.get("procs", [])
         pid = procs[0].pid if procs else "?"
-        status = "running" if (procs and procs[0].poll() is None) else "done"
+        poll = procs[0].poll() if procs else None
+        if poll is None:
+            status = "running"
+        elif hasattr(os, "WIFSTOPPED") and procs[0].pid and _process_stopped(procs[0].pid):
+            status = "stopped"
+        else:
+            status = "done"
         print(f"[{j['id']}] {pid} {status} {j.get('cmd', '')}")
 
 
 def _run_builtin_fg(jobs: list, set_exit_code: Any) -> None:
-    """Bring the most recent job to foreground; wait and set exit code."""
+    """Bring the most recent job to foreground; wait and set exit code.
+    On Unix with job control, give terminal to job's process group and send SIGCONT if stopped.
+    """
     if not jobs:
         print("pyshell: fg: no current job", file=sys.stderr)
         set_exit_code(1)
         return
     job = jobs.pop()
     procs = job.get("procs", [])
+    if not procs:
+        set_exit_code(1)
+        return
+    proc = procs[0]
+    pgid = job.get("pgid", proc.pid)
+    if os.name != "nt" and _job_control_available() and pgid is not None:
+        tty_fd = sys.stdin.fileno()
+        shell_pgrp = os.getpgrp()
+        old_sigttou = None
+        try:
+            old_sigttou = signal.signal(signal.SIGTTOU, signal.SIG_IGN)
+        except (AttributeError, ValueError):
+            pass
+        try:
+            os.tcsetpgrp(tty_fd, pgid)
+            try:
+                os.kill(-pgid, signal.SIGCONT)
+            except (ProcessLookupError, OSError):
+                pass
+        finally:
+            if old_sigttou is not None:
+                signal.signal(signal.SIGTTOU, old_sigttou)
+        while True:
+            try:
+                _, status = os.waitpid(proc.pid, os.WUNTRACED)
+            except ChildProcessError:
+                break
+            if os.WIFSTOPPED(status):
+                jobs.append(job)
+                _restore_terminal_to_shell(tty_fd, shell_pgrp)
+                print(f"[{job['id']}]+  Stopped                 {job.get('cmd', '')}")
+                set_exit_code(146)
+                return
+            if os.WIFEXITED(status):
+                _restore_terminal_to_shell(tty_fd, shell_pgrp)
+                set_exit_code(os.WEXITSTATUS(status))
+                return
+            if os.WIFSIGNALED(status):
+                _restore_terminal_to_shell(tty_fd, shell_pgrp)
+                set_exit_code(128 + os.WTERMSIG(status))
+                return
     for p in procs:
         try:
             p.wait()

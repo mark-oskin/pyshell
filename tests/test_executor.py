@@ -1,11 +1,16 @@
 """Tests for pyshell executor: Python eval and command execution."""
 
+import io
 import os
+import signal
+import subprocess
 import sys
 import tempfile
+import time
 import unittest
+from contextlib import redirect_stdout
 
-from pyshell.executor import Executor
+from pyshell.executor import Executor, _job_control_available
 from pyshell.builtins import run_builtin_command, run_ls_dir
 
 
@@ -237,6 +242,78 @@ class TestBackgroundJobs(unittest.TestCase):
         self.assertIn("procs", ex._jobs[0])
         ex._jobs[0]["procs"][0].wait()
         ex._jobs.clear()
+
+
+class TestJobControlSuspend(unittest.TestCase):
+    """Suspend (Ctrl+Z) and job control: available on Unix with TTY, not on Windows."""
+
+    def test_job_control_available_false_on_windows(self):
+        """On Windows, job control (suspend) is not available."""
+        if os.name != "nt":
+            self.skipTest("Windows only")
+        self.assertFalse(_job_control_available())
+
+    def test_job_control_available_false_without_tty(self):
+        """When stdin is not a TTY (e.g. pytest), job control is not used."""
+        # In pytest stdin is typically not a TTY; so we expect False on both platforms
+        if sys.stdin.isatty():
+            self.skipTest("Requires non-TTY stdin (e.g. pytest)")
+        self.assertFalse(_job_control_available())
+
+    def test_background_then_fg_completes_on_windows(self):
+        """On Windows, background job + fg still completes and sets exit code."""
+        if os.name != "nt":
+            self.skipTest("Windows only")
+        ex = Executor()
+        ex.set_exit_callback(lambda code: None)
+        ex.run_command(
+            [sys.executable, "-c", "import sys; sys.exit(42)"],
+            background=True,
+        )
+        self.assertEqual(len(ex._jobs), 1)
+        out = io.StringIO()
+        with redirect_stdout(out):
+            ex.run_command(["fg"])
+        self.assertEqual(ex._last_exit_code, 42)
+        self.assertEqual(len(ex._jobs), 0)
+
+    @unittest.skipIf(os.name == "nt", "Unix job control: suspend/fg with stopped jobs")
+    def test_jobs_shows_stopped_on_unix(self):
+        """On Unix, a stopped process in the job list is shown as 'stopped' by jobs."""
+        if not hasattr(os, "WIFSTOPPED"):
+            self.skipTest("No WIFSTOPPED (Unix job control)")
+        ex = Executor()
+        ex.set_exit_callback(lambda code: None)
+        # Start a process that we can stop with SIGTSTP
+        proc = subprocess.Popen(
+            [sys.executable, "-c", "import time; time.sleep(999)"],
+            start_new_session=True,
+        )
+        try:
+            os.kill(proc.pid, signal.SIGTSTP)
+            time.sleep(0.2)
+            _, st = os.waitpid(proc.pid, os.WNOHANG | os.WUNTRACED)
+            if not os.WIFSTOPPED(st):
+                self.skipTest("Process did not stop (no TTY?)")
+            ex._jobs.append({
+                "id": 1,
+                "procs": [proc],
+                "cmd": "sleep 999",
+                "pgid": proc.pid,
+            })
+            out = io.StringIO()
+            with redirect_stdout(out):
+                ex.run_command(["jobs"])
+            self.assertIn("stopped", out.getvalue().lower())
+        finally:
+            try:
+                os.kill(proc.pid, signal.SIGKILL)
+            except (ProcessLookupError, OSError):
+                pass
+            try:
+                proc.wait()
+            except Exception:
+                pass
 
 
 class TestTypeWhich(unittest.TestCase):
