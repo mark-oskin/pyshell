@@ -31,6 +31,34 @@ else:
     msvcrt = None  # type: ignore
 
 
+def _pyshell_subprocess_argv(inner: str) -> list[str]:
+    """Build argv for `python -m pyshell -c ...` without cwd shadowing the package.
+
+    When cwd contains a directory named `pyshell` (e.g. the project checkout),
+    Python prepends cwd to sys.path and imports that folder instead of the installed
+    package, causing ImportError. Use -P on 3.11+; on older versions rely on
+    PYTHONPATH from _pyshell_subprocess_env().
+    """
+    argv = [sys.executable]
+    if sys.version_info >= (3, 11):
+        argv.append("-P")
+    argv.extend(["-m", "pyshell", "-c", inner])
+    return argv
+
+
+def _pyshell_subprocess_env() -> dict[str, str] | None:
+    """Return env for subshell child, or None to inherit os.environ unchanged."""
+    if sys.version_info >= (3, 11):
+        return None
+    import pyshell
+
+    pkg_parent = os.path.dirname(os.path.dirname(pyshell.__file__))
+    env = os.environ.copy()
+    prefix = env.get("PYTHONPATH", "")
+    env["PYTHONPATH"] = pkg_parent + (os.pathsep + prefix if prefix else "")
+    return env
+
+
 def main() -> int:
     """CLI entry: run REPL, script, or -c command.
 
@@ -673,9 +701,10 @@ class Shell:
     def _run_subshell(self, inner: str) -> None:
         """Run inner command line in a new pyshell process; print output and set last exit code."""
         proc = subprocess.run(
-            [sys.executable, "-m", "pyshell", "-c", inner],
+            _pyshell_subprocess_argv(inner),
             capture_output=True,
             text=True,
+            env=_pyshell_subprocess_env(),
         )
         if proc.stdout:
             print(proc.stdout, end="")

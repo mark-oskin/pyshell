@@ -450,6 +450,27 @@ class TestSubshell(unittest.TestCase):
         shell = Shell()
         self.assertEqual(shell._extract_subshell_content("( cd /tmp && pwd )"), "cd /tmp && pwd")
 
+    def test_subshell_with_shadowing_pyshell_dir(self):
+        """( ... ) must work when cwd contains a sibling pyshell/ directory."""
+        start = os.getcwd()
+        with tempfile.TemporaryDirectory() as parent:
+            shadow = os.path.join(parent, "pyshell")
+            os.mkdir(shadow)
+            try:
+                os.chdir(parent)
+                shell = Shell()
+                shell.executor.set_exit_callback(lambda code: None)
+                import io
+                from contextlib import redirect_stdout, redirect_stderr
+                err = io.StringIO()
+                out = io.StringIO()
+                with redirect_stdout(out), redirect_stderr(err):
+                    shell._eval("( pwd )")
+                self.assertNotIn("ImportError", err.getvalue())
+                self.assertIn(parent, out.getvalue() or "")
+            finally:
+                os.chdir(start)
+
 
 class TestCLI(unittest.TestCase):
     """pyshell --help, --version, -c, --no-rc."""
