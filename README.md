@@ -6,7 +6,7 @@ A command-line shell written in Python with **Python-like syntax**. Use Python e
 
 - **Python syntax**: Assign variables, evaluate expressions, call functions, use `print()`, etc.
 - **Shell commands**: Type a command and arguments (e.g. `ls -la`, `git status`); if it isn’t valid Python, it’s run as an external program.
-- **Line continuation**: End a line with `\` to continue on the next line.
+- **Multiline input**: Pure Python blocks get automatic `...` prompts; shell pipelines with Python stages use `\` at the end of each line (see [Multiline input at the prompt](#multiline-input-at-the-prompt)).
 - **Built-in commands**: `cd`, `pwd`, `exit`, `env`, `alias`, `unalias`, `jobs`, `fg`, `bg`, `help` (as commands or from Python). You can type `pwd` or `pwd()` — both work.
 - **PATH**: External commands (e.g. `ls`) are resolved using your `PATH`. On **Windows**, `ls`, `dir`, `cat`, and `echo` are built-in (Unix-style) when not on PATH.
 - **true / false**: Built-in no-ops that set exit code 0 or 1 (e.g. for `false || echo failed`).
@@ -16,7 +16,7 @@ A command-line shell written in Python with **Python-like syntax**. Use Python e
 - **Background jobs**: End a command with `&` to run in background; `jobs` to list, `fg` to bring last job to foreground.
 - **Custom prompt**: `prompt(">>> ")` or `prompt("{base} $ ")`; placeholders: `{cwd}`, `{base}`, `{user}`, `{hostname}`, `{time}`, `{exit}`, `{jobs}` (see [Prompt placeholders](#prompt-placeholders)).
 - **Tab completion**: Commands (builtins + PATH), filenames, and variables.
-- **Pipelines**: `cmd1 | cmd2` (e.g. `pwd | cat`). **History** (persistent in `~/.pyshell_history`) and **last exit code** (`last_exit_code`). **Scripts**: `pyshell script.psh`.
+- **Pipelines**: `cmd1 | cmd2` (e.g. `pwd | cat`). Stages that are valid Python run in the REPL namespace with prior stdout on `sys.stdin` (e.g. `cat file | for line in sys.stdin: ...`). **History** (persistent in `~/.pyshell_history`) and **last exit code** (`last_exit_code`). **Scripts**: `pyshell script.psh`.
 - **Startup config**: Put commands or Python in `~/.pyshellrc` or `./.pyshellrc`; they run automatically when the REPL starts.
 - **Glob expansion**: Command arguments like `*.py` or `src/**/*.py` are expanded to matching paths.
 - **~ expansion**: `~` and `~user` in command arguments expand to home directories (e.g. `cd ~`, `cat ~/.pyshellrc`).
@@ -138,15 +138,49 @@ Environment and shell integration (env vars and `last_exit_code` are in the name
 
 In the REPL, run `help('shell')` for the full script API (run, capture, jobs, fg, bg, kill, exit_code, prompt, cd, pwd, pushd, popd, dirs).
 
-Line continuation with `\` lets you split long lines:
+### Multiline input at the prompt
+
+pyshell reads one **logical line** per command. Each time you press Enter, one physical line is submitted; the REPL keeps asking until the logical line is complete.
+
+| Situation | How to continue |
+|-----------|-----------------|
+| Pure Python (`for`, `def`, `if`, …) | After a header ending in `:`, pyshell usually shows `...` for the body automatically. |
+| Unclosed quotes or brackets | Automatic `...` until delimiters balance. |
+| Explicit line split | End the line with `\`; the next prompt is `...`. |
+| Shell command `\|` multiline Python | The line is a pipeline, not pure Python — use `\` at the end of **every** line until the full pipeline is typed (including right after `\|`). |
+
+Pure Python (automatic `...` after `:`):
+
+```text
+>>> for i in range(3):
+...     print(i * i)
+...
+0
+1
+4
+```
+
+Pipeline with a Python stage (prior stage stdout on `sys.stdin`; `\` on each continued line):
+
+```text
+>>> cat README.md | \
+... x = 0 \
+... for f in sys.stdin: \
+...     x = x + len(f.split(' ')) \
+... print(x)
+2141
+```
+
+Split a long expression with `\`:
 
 ```text
 >>> total = 1 + 2 + 3 + \
 ...     4 + 5
 >>> total
 15
->>> exit()
 ```
+
+Recalled history entries that contain embedded newlines (Up arrow) are submitted as one block. Run `help('multiline')` in the shell for a short reference.
 
 ### Shell commands
 
@@ -162,10 +196,23 @@ Run external commands by typing them as you would in bash (no commas, no quotes 
 /home/you
 >>> cd ~
 >>> ls *.py
+>>> pwd | cat
+/home/you/projects/pyshell
 >>> python -c "import time; time.sleep(2)" &
 [1] 12345
 >>> jobs
 >>> fg
+```
+
+Pipelines can end in Python — use `\` to continue past the pipe, then write normal Python that reads `sys.stdin`:
+
+```text
+>>> cat README.md | \
+... n = 0 \
+... for line in sys.stdin: \
+...     n += len(line.split()) \
+... print(n)
+2141
 ```
 
 Create `~/.pyshellrc` or `./.pyshellrc` to run commands at startup (e.g. set aliases, variables).

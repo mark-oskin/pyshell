@@ -49,7 +49,7 @@ BUILTIN_HELP["false"] = "Do nothing; exit with code 1."
 BUILTIN_HELP["mkdir"] = "Create directory. mkdir [-p] path... (creates parents with -p)."
 BUILTIN_HELP["kill"] = "Send signal to process or job. kill [-signal] pid | %jobid [...]. Default: SIGTERM."
 
-# Extended help for documentation topics (help('prompt'), help('quoting'), help('windows'))
+# Extended help for documentation topics (help('prompt'), help('quoting'), help('multiline'), help('windows'))
 EXTENDED_HELP: dict[str, str] = {
     "prompt": """Prompt placeholders (use in prompt("...") or the prompt command):
 
@@ -75,6 +75,33 @@ Examples:
   • Redirect paths and here-strings (<<<) also get $VAR and ~ expansion.
   • Use quotes to include spaces or to protect $ and ~ when you want them
     passed literally (e.g. in Python strings use '...' or escape as needed).""",
+    "multiline": """Multiline input at the REPL:
+
+  pyshell reads one logical line per command. Press Enter to submit each
+  physical line; the REPL keeps prompting until the line is complete.
+
+  Pure Python (for/def/if/while/with/try ending in :):
+    Automatic ... prompt for the body — usually no backslash needed.
+
+  Unclosed quotes or brackets:
+    Automatic ... until delimiters balance.
+
+  Explicit split:
+    End a line with \\ to continue on the next line (... prompt).
+
+  Shell command | multiline Python:
+    Because the line is a pipeline, use \\ at the end of EVERY line until
+    the full pipeline is typed (including right after |). Prior stage stdout
+    is available on sys.stdin in Python stages.
+
+  Example:
+    cat README.md | \\
+    x = 0 \\
+    for f in sys.stdin: \\
+        x = x + len(f.split(' ')) \\
+    print(x)
+
+  Up-arrow history with embedded newlines is submitted as one block.""",
     "windows": """Windows vs Unix:
 
   • Line editing: **prompt_toolkit** provides readline-style editing (Emacs keys,
@@ -453,13 +480,13 @@ def make_builtins(
             set_prompt(s)
 
     def help(topic: str = "") -> str:
-        """Show help for builtins. help() or help('cd'). Extended: help('prompt'), help('quoting'), help('windows')."""
+        """Show help for builtins. help() or help('cd'). Extended: help('prompt'), help('quoting'), help('multiline'), help('windows')."""
         if not topic:
             lines = ["Builtins (use help('name') for details):"]
             for name in sorted(BUILTIN_HELP.keys()):
                 lines.append(f"  {name:<12} {BUILTIN_HELP[name]}")
             lines.append("")
-            lines.append("Extended docs: help('prompt'), help('quoting'), help('windows'), help('shell')")
+            lines.append("Extended docs: help('prompt'), help('quoting'), help('multiline'), help('windows'), help('shell')")
             lines.append("")
             lines.append("Python: expressions, print(), etc. shell.run(cmd), shell.capture(cmd), shell.jobs/fg/bg/kill, shell.cd/pwd/pushd/popd/dirs. help('shell') for script API.")
             lines.append("External commands: type name and args.")
@@ -533,7 +560,7 @@ def run_builtin_command(name: str, args: list[str]) -> str | int | None:
         if not args:
             for bname in sorted(BUILTIN_HELP.keys()):
                 print(f"  {bname:<12} {BUILTIN_HELP[bname]}")
-            print("\nExtended docs: help prompt, help quoting, help windows")
+            print("\nExtended docs: help prompt, help quoting, help multiline, help windows, help shell")
             print("Use help(name) for details. Python: expressions, print(), etc. Commands: name and args.")
         else:
             topic = args[0]

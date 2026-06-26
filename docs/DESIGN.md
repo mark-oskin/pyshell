@@ -27,7 +27,7 @@ pyshell is a command-line shell that accepts both **Python-like code** and **she
 
 ### 2.2 Data flow (single line)
 
-1. **shell**: User input → `_read_line()` (built-in line editor) → optional continuation until line complete.
+1. **shell**: User input → `_read_line()` (prompt_toolkit on TTYs) → optional continuation until line complete.
 2. **shell**: `_eval(line)` → if conditional (`&&`/`||`), split and evaluate segments; else `_eval_one(cmd_line, redirects, background)`.
 3. **shell**: `_eval_one` uses **parser**: `parse_line(line)` → `("python" \| "command" \| "pipeline", payload)`. If the line has unquoted redirects/background, **parser** `parse_redirects(line)` yields `(argv, redirects, background)`; otherwise line may be run as Python.
 4. **executor**: For Python: `run_python(source, line)` (AST parse, eval/exec in namespace). For command: `run_command(argv, redirects, background)`. For pipeline: `run_pipeline(segments, redirects, background)`.
@@ -57,7 +57,7 @@ pyshell is a command-line shell that accepts both **Python-like code** and **she
 ### 3.3 Conditionals and pipelines
 
 - **parser.has_conditional** / **split_conditional**: Split by unquoted `&&` and `||`; segments are evaluated in order; connectors short-circuit.
-- **parser._split_pipeline**: Split by unquoted `|`; each segment is a command line. Executor runs stages in a pipeline with pipes between them.
+- **parser._split_pipeline**: Split by unquoted `|`; each segment is a command line. Executor runs stages in a pipeline with pipes between them. When **segment_sources** text for a stage classifies as Python (**parse_line**), that stage runs via **executor._run_python_pipeline_stage** instead of a subprocess.
 
 ---
 
@@ -78,7 +78,7 @@ pyshell is a command-line shell that accepts both **Python-like code** and **she
 
 ### 4.4 Pipelines and jobs
 
-- **executor.run_pipeline**: Runs each segment as a subprocess; connects stdout of stage N to stdin of stage N+1; redirects apply to the last stage only. Background: `&` runs the (single) command or last pipeline stage in a new process group; **executor** tracks jobs for `jobs`/`fg`/`bg`.
+- **executor.run_pipeline**: Non-Python stages run as subprocesses (or builtins); stdout of stage N feeds stage N+1. Python stages (**parse_line** on **segment_sources** text) run in the REPL namespace via **executor._run_python_pipeline_stage**: prior stage stdout is wired to **sys.stdin**, captured stdout becomes input to the next stage. If the last stage is Python and prints, that output is flushed to the terminal (or redirect target). Redirects apply to the last stage only. Background: `&` runs the (single) command or last pipeline stage in a new process group; **executor** tracks jobs for `jobs`/`fg`/`bg`.
 
 ---
 
@@ -92,8 +92,8 @@ pyshell is a command-line shell that accepts both **Python-like code** and **she
 
 - **prompt_toolkit** drives interactive input on TTYs: standard Emacs/readline keybindings (Ctrl+A/E/K/U/W/D, history, completion), cross-platform (including macOS libedit quirks avoided). pyshell writes the full prompt string itself (so paths with spaces display correctly) and passes it to ``PromptSession.prompt()``.
 - **line_reader.read_editable_line**: Wraps prompt_toolkit; non-TTY stdin uses plain ``readline()``. Tab completion calls **Shell._get_completions**. Persistent history is loaded into an ``InMemoryHistory`` each read from **Shell._history**; entries are still saved to ``~/.pyshell_history`` on exit.
-- **shell._read_editable** / **_read_line**: Wrap the line reader; handle trailing `\`, unclosed delimiters, and incomplete Python blocks with `...` continuations. Recalled multi-line history (embedded `\n`) is submitted as-is.
-- **executor.run_pipeline**: Pipeline stages whose text is valid Python run as Python with stdin wired from the previous stage's stdout.
+- **shell._read_editable** / **_read_line**: Wrap the line reader. Continuation order: (1) trailing `\` — classic shell line continuation; (2) **shell._has_unclosed_delimiters** — unclosed quotes/brackets; (3) **parser.python_block_continuation_needed** — compound Python header (e.g. `for i in range(3):`) still missing its body. Each step reads another physical line at the `...` prompt and appends `\n` + text. Recalled multi-line history (embedded `\n` from prompt_toolkit) is submitted as-is without re-prompting.
+- **Multiline UX**: prompt_toolkit submits on Enter (**multiline=False**). Pure Python blocks often need no `\` because step (3) applies once the accumulated text is valid Python with a missing body. Lines containing an unquoted `|` are pipelines: step (3) does not apply to a prefix like `cat f |`, so piped multiline Python requires `\` at the end of each physical line until the full pipeline is complete.
 
 ### 5.3 History persistence
 

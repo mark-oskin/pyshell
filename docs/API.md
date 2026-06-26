@@ -62,9 +62,17 @@ Exposed as `shell` in the Python namespace. **Script API** for Python code and p
 | **_eval_conditional(segments, redirects, background)** | Run &&/|| chain. |
 | **_eval_one(cmd_line, redirects, background)** | Dispatch to Python or run_command/run_pipeline. |
 | **_read_editable(prompt)** → str \| None | Read one line with the prompt_toolkit (TTY). |
-| **_read_line()** → str \| None | Read one line with continuation. |
+| **_read_line()** → str \| None | Read one logical line: `\` continuation, unclosed delimiters, then **python_block_continuation_needed**; multiline history bypasses re-prompting. |
 | **get_history()** → list[str] | Return history list (for history builtin). |
 | **request_exit(code)** | Set _running=False and raise SystemExit. |
+
+#### Multiline input (`_read_line`)
+
+1. **Trailing `\`** — append next physical line (`...` prompt).
+2. **Unclosed delimiters** — quotes/brackets; append until balanced.
+3. **python_block_continuation_needed** — compound Python header missing body (e.g. `for i in range(3):`).
+
+Embedded `\n` from recalled history skips steps 1–3. Pipeline lines with unquoted `|` need `\` on each continued line because step 3 does not apply to shell prefixes like `cat f |`.
 
 ---
 
@@ -118,7 +126,8 @@ Exposed as `shell` in the Python namespace. **Script API** for Python code and p
 | **get_jobs()** → list[dict] | Snapshot of job list: id, cmd, status ('running'\|'stopped'\|'done'), pid. |
 | **run_python(source, original_line)** | Execute Python source; return value for expressions. |
 | **run_command(argv, redirects, background)** | Run one command (builtin or external). |
-| **run_pipeline(segments, redirects, background, segment_sources=None)** | Run pipeline; redirects on last stage. Python stages run when `segment_sources` text is valid Python. |
+| **run_pipeline(segments, redirects, background, segment_sources=None)** | Run pipeline; redirects on last stage. With **segment_sources**, stages whose text is valid Python run in the REPL namespace (prior stdout → **sys.stdin**). |
+| **_run_python_pipeline_stage(source, stdin_text)** → str | Execute one Python pipeline stage; return captured stdout for the next stage. |
 
 #### Jobs and job control
 
