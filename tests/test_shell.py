@@ -215,6 +215,16 @@ class TestRunScript(unittest.TestCase):
 
 
 class TestTabCompletion(unittest.TestCase):
+    def test_setup_completion_binds_libedit_tab(self):
+        """libedit (macOS) needs bind ^I rl_complete in addition to tab: complete."""
+        shell = Shell()
+        with unittest.mock.patch("pyshell.shell.readline") as m:
+            m.parse_and_bind = unittest.mock.Mock()
+            shell._setup_completion()
+        calls = [c[0][0] for c in m.parse_and_bind.call_args_list]
+        self.assertIn("tab: complete", calls)
+        self.assertIn("bind ^I rl_complete", calls)
+
     def test_get_completions_builtin_prefix(self):
         shell = Shell()
         shell.executor.set_exit_callback(lambda code: None)
@@ -377,6 +387,19 @@ class TestSource(unittest.TestCase):
             shell.executor.run_command(["source"])
         self.assertIn("missing file operand", err.getvalue())
         self.assertEqual(shell.executor._last_exit_code, 1)
+
+
+class TestMultilinePythonBlock(unittest.TestCase):
+    def test_for_loop_executes(self):
+        import io
+        from contextlib import redirect_stdout
+        shell = Shell()
+        shell.executor.set_exit_callback(lambda code: None)
+        source = "for i in range(3):\n    print(i * i)"
+        out = io.StringIO()
+        with redirect_stdout(out):
+            shell.executor.run_python(source, source)
+        self.assertEqual(out.getvalue().strip(), "0\n1\n4")
 
 
 class TestMultilineDelimiters(unittest.TestCase):

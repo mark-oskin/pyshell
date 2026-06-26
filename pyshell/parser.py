@@ -6,6 +6,33 @@ and split_conditional / _split_pipeline for conditionals and pipelines.
 """
 
 import ast
+import keyword
+
+
+def is_complete_python(source: str) -> bool:
+    """Return True if ``source`` is syntactically complete Python (module mode)."""
+    try:
+        ast.parse(source)
+        return True
+    except SyntaxError:
+        return False
+
+
+def python_block_continuation_needed(source: str) -> bool:
+    """Return True when ``source`` is a Python compound header still missing its body."""
+    s = source.rstrip()
+    if not s or is_complete_python(s):
+        return False
+    try:
+        ast.parse(s)
+        return False
+    except SyntaxError as e:
+        msg = getattr(e, "msg", "") or str(e)
+        if "expected an indented block" in msg:
+            return True
+        if "unexpected EOF" in msg and s.endswith(":"):
+            return True
+    return False
 
 
 def parse_line(line: str) -> tuple[str, str | list | list[list[str]]]:
@@ -42,10 +69,12 @@ def parse_line(line: str) -> tuple[str, str | list | list[list[str]]]:
         return as_command()
 
     # Multiple tokens starting with an identifier (e.g. ls -la) → command,
-    # but not if it looks like Python (assignment or call).
+    # but not if it looks like Python (assignment, call, or compound statement).
     if "=" not in line_stripped and "(" not in line_stripped:
         parts = line_stripped.split()
         if len(parts) >= 2 and parts[0].isidentifier():
+            if _is_python(line_stripped) and not _is_shell_command_expression(line_stripped):
+                return ("python", line)
             return as_command()
 
     if _is_python(line_stripped):
@@ -73,13 +102,29 @@ def _is_single_identifier(line: str) -> bool:
     return parts[0].isidentifier()
 
 
-def _is_python(line: str) -> bool:
-    """Return True if the line is valid Python (expression or statement)."""
+def _is_shell_command_expression(line: str) -> bool:
+    """True when ast parses the line as a simple expression like ``ls -la`` (shell flags)."""
+    s = line.strip()
+    parts = s.split()
+    if len(parts) < 2:
+        return False
+    if keyword.iskeyword(parts[0]):
+        return False
+    if s.endswith(":"):
+        return False
     try:
-        ast.parse(line)
-        return True
+        tree = ast.parse(s)
     except SyntaxError:
-        pass
+        return False
+    return len(tree.body) == 1 and isinstance(tree.body[0], ast.Expr)
+
+
+def _is_python(line: str) -> bool:
+    """Return True if the line is valid Python (expression, statement, or block header)."""
+    if is_complete_python(line):
+        return True
+    if python_block_continuation_needed(line):
+        return True
     # Also try as expression only (e.g. "2 + 3")
     try:
         ast.parse(line, mode="eval")

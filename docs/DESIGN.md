@@ -45,8 +45,8 @@ pyshell is a command-line shell that accepts both **Python-like code** and **she
 ### 3.1 Python vs shell
 
 - Lines with unquoted `|` (pipeline) or unquoted redirect/`&` are treated as shell; the parser never runs them as Python.
-- Otherwise: if the line is a **single identifier** (e.g. `pwd`, `ls`) or multiple tokens starting with an identifier without `=` or `(`, it is treated as a command.
-- If the line parses as valid Python (AST), it is run as Python; else it is run as a command. So `2 + 3` → Python, `ls -la` → command.
+- Otherwise: if the line is a **single identifier** (e.g. `pwd`, `ls`) or multiple tokens starting with an identifier without `=` or `(`, it is treated as a command **unless** it is valid Python (including compound headers like `for i in range(3):` that await an indented body). Shell commands that parse as simple expressions (e.g. `ls -la`) stay commands.
+- If the line parses as valid Python (AST), or is a compound statement header still missing its body, it is run as Python; else it is run as a command. So `2 + 3` → Python, `ls -la` → command, `for i in range(3):` → Python with `...` continuation for the body.
 
 ### 3.2 Tokenization
 
@@ -89,7 +89,7 @@ pyshell is a command-line shell that accepts both **Python-like code** and **she
 
 ### 5.2 Line reading
 
-- If **readline** is available: `input(prompt)` with completion and history from readline.
+- If **readline** is available: write the prompt with `sys.stdout.write`, then `input()` (no prompt arg) so libedit/GNU readline handles editing, history, and Tab completion. **Shell._setup_completion** binds both `tab: complete` (GNU) and `bind ^I rl_complete` (libedit/macOS).
 - Else on Windows: **shell._read_line_fallback**: key-by-key with `msvcrt.getwch()`; maintains `line` and cursor `pos`; handles Enter, Ctrl+C, Ctrl+Z, Up/Down (history), Left/Right, Home/End, Ctrl+A/Ctrl+E, Backspace, Tab (completion), and printable insert. No readline dependency.
 
 ### 5.3 History persistence

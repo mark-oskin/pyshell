@@ -6,6 +6,7 @@ from pyshell.parser import (
     parse_redirects,
     has_conditional,
     split_conditional,
+    python_block_continuation_needed,
     _split_command,
     _split_pipeline,
 )
@@ -93,6 +94,32 @@ class TestParseLine(unittest.TestCase):
         kind, payload = parse_line('echo "a|b"')
         self.assertEqual(kind, "command")
         self.assertEqual(payload, ["echo", "a|b"])
+
+    def test_for_loop_header_is_python(self):
+        kind, payload = parse_line("for i in range(3):")
+        self.assertEqual(kind, "python")
+        self.assertIn("for i in range(3):", payload)
+
+    def test_while_loop_header_is_python(self):
+        kind, payload = parse_line("while n < 3:")
+        self.assertEqual(kind, "python")
+
+    def test_import_statement_is_python(self):
+        kind, payload = parse_line("import os")
+        self.assertEqual(kind, "python")
+
+    def test_if_header_is_python(self):
+        kind, payload = parse_line("if x > 1:")
+        self.assertEqual(kind, "python")
+
+
+class TestPythonBlockContinuation(unittest.TestCase):
+    def test_for_header_needs_continuation(self):
+        self.assertTrue(python_block_continuation_needed("for i in range(3):"))
+        self.assertFalse(python_block_continuation_needed("for i in range(3):\n    pass"))
+
+    def test_complete_line_no_continuation(self):
+        self.assertFalse(python_block_continuation_needed("x = 1"))
 
 
 class TestSplitCommand(unittest.TestCase):

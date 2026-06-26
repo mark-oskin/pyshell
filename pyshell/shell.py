@@ -14,6 +14,7 @@ from pyshell.parser import (
     has_unquoted_redirect_or_background,
     has_conditional,
     split_conditional,
+    python_block_continuation_needed,
 )
 from pyshell.executor import Executor
 
@@ -469,6 +470,11 @@ class Shell:
             return
         readline.set_completer(self._completer)
         readline.parse_and_bind("tab: complete")
+        # macOS/BSD libedit (common when `import readline` on Darwin) ignores GNU ``tab: complete``.
+        try:
+            readline.parse_and_bind("bind ^I rl_complete")
+        except (TypeError, ValueError):
+            pass
         # WSL2/Linux: ensure Backspace and DEL both delete backward (avoid \r / prompt wipe).
         try:
             readline.parse_and_bind(r'"\C-h": backward-delete-char')   # Ctrl+H (Backspace on some terms)
@@ -725,11 +731,12 @@ class Shell:
             Entered line or None on EOF (Ctrl+Z or Ctrl+D).
         """
         if msvcrt is None:
-            # Unix/WSL: pass prompt to input() so readline knows prompt length; backspace then
-            # deletes only within the line instead of moving to BOL and wiping the prompt.
-            # (Backspace binding is set in _setup_completion.)
+            # Unix/macOS: write the prompt ourselves (readline truncates at spaces in prompt strings),
+            # then read the line with input("") so libedit/GNU readline still handles editing + Tab.
+            sys.stdout.write(prompt)
+            sys.stdout.flush()
             try:
-                return input(prompt)
+                return input()
             except EOFError:
                 return None
         # Windows: key-by-key with msvcrt, our own completion and history (Up/Down)
@@ -867,8 +874,7 @@ class Shell:
         r"""Read a line with optional continuation (trailing \ and unclosed delimiters)."""
         try:
             prompt = self.executor.get_prompt()
-            # Never pass prompt to input(): readline truncates at first space (and at U+00A0).
-            # Always use fallback so we write the full prompt then input(); works on Windows and Linux/WSL.
+            # Write the full prompt ourselves, then input("") — readline/libedit handles line edit + Tab.
             line = self._read_line_fallback(prompt)
             if line is None:
                 return None
@@ -884,6 +890,14 @@ class Shell:
             except EOFError:
                 return line.strip() or None
         while self._has_unclosed_delimiters(line):
+            try:
+                cont = input("... ") if readline is not None else self._read_line_fallback("... ")
+                if cont is None:
+                    return line.strip() or None
+                line += "\n" + cont
+            except EOFError:
+                return line.strip() or None
+        while python_block_continuation_needed(line):
             try:
                 cont = input("... ") if readline is not None else self._read_line_fallback("... ")
                 if cont is None:

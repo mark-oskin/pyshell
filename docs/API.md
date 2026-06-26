@@ -75,6 +75,8 @@ Exposed as `shell` in the Python namespace. **Script API** for Python code and p
 | Function | Description |
 |----------|-------------|
 | **parse_line(line)** → tuple | Classify line: ("python", source) or ("command", argv) or ("pipeline", list of argv). |
+| **is_complete_python(source)** → bool | True if source is syntactically complete Python (module mode). |
+| **python_block_continuation_needed(source)** → bool | True when source is a compound header (e.g. `for`/`while`/`if`) still missing its body. |
 | **_is_single_identifier(line)** → bool | True if line is exactly one identifier. |
 | **_is_python(line)** → bool | True if line parses as valid Python. |
 | **has_unquoted_redirect_or_background(line)** → bool | True if redirect tokens or trailing & outside quotes. |
