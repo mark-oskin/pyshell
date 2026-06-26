@@ -30,6 +30,7 @@ from pyshell.builtins import (
 )
 from pyshell.expansion import expand_command_argv, expand_redirect_path
 from pyshell.parser import parse_line
+from pyshell.command_resolve import lookup_command, resolve_command_argv
 from pyshell.subprocess_env import subprocess_env
 
 # Type for redirect list: (op, path or None for 2>&1)
@@ -253,7 +254,7 @@ class Executor:
                 elif n in BUILTIN_NAMES or n == ".":
                     print(f"{n} is a shell builtin")
                 else:
-                    path = shutil.which(n)
+                    path = lookup_command(n)
                     if path:
                         print(f"{n} is {path}")
                     else:
@@ -274,7 +275,7 @@ class Executor:
                     # which typically doesn't print for builtins; we do for consistency
                     print(f"{n}: shell builtin")
                 else:
-                    path = shutil.which(n)
+                    path = lookup_command(n)
                     if path:
                         print(path)
                     else:
@@ -446,7 +447,7 @@ class Executor:
             if result != "":
                 return result
             return None
-        argv = _resolve_command_argv(argv)
+        argv = resolve_command_argv(argv)
         if argv is None:
             self._set_exit_code(127)
             print(f"pyshell: command not found: {name}", file=sys.stderr)
@@ -602,7 +603,7 @@ class Executor:
                     last_stdout = out
                     last_code = 0
                     continue
-                resolved = _resolve_command_argv(argv)
+                resolved = resolve_command_argv(argv)
                 if resolved is None:
                     last_code = 127
                     self._set_exit_code(127)
@@ -1121,25 +1122,3 @@ def _is_expression_statement(tree: ast.AST) -> bool:
 def _is_bare_name(tree: ast.AST) -> bool:
     """Return True if the AST is a single Name (identifier)."""
     return isinstance(tree, ast.Name)
-
-
-def _resolve_command_argv(argv: list[str]) -> list[str] | None:
-    """Resolve the command name via PATH; return full argv or None if not found.
-
-    Args:
-        argv: [command_name, ...]. command_name may be a path.
-
-    Returns:
-        [resolved_path, ...args] or None if command not found.
-    """
-    if not argv:
-        return argv
-    name = argv[0]
-    # Already an absolute path or has path separators
-    if os.path.isabs(name) or os.path.sep in name or (os.path.altsep and os.path.altsep in name):
-        return argv if os.path.isfile(name) or os.path.isfile(name + ".exe") else None
-    path = os.environ.get("PATH", "")
-    resolved = shutil.which(name, path=path)
-    if resolved is None:
-        return None
-    return [resolved] + argv[1:]

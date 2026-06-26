@@ -16,7 +16,7 @@ A command-line shell written in Python with **Python-like syntax**. Use Python e
 - **Background jobs**: End a command with `&` to run in background; `jobs` to list, `fg` to bring last job to foreground.
 - **Custom prompt**: `prompt(">>> ")` or `prompt("{base} $ ")`; placeholders: `{cwd}`, `{base}`, `{user}`, `{hostname}`, `{time}`, `{exit}`, `{jobs}` (see [Prompt placeholders](#prompt-placeholders)).
 - **Tab completion**: Commands (builtins + PATH), filenames, and variables.
-- **Pipelines**: `cmd1 | cmd2` (e.g. `pwd | cat`). Stages that are valid Python run in the REPL namespace with prior stdout on `sys.stdin` (e.g. `cat file | for line in sys.stdin: ...`). **History** (persistent in `~/.pyshell_history`) and **last exit code** (`last_exit_code`). **Scripts**: `pyshell script.psh`.
+- **Pipelines**: `cmd1 | cmd2` (e.g. `pwd | cat`). Stages that are valid Python run in the REPL namespace with prior stdout on `sys.stdin` (e.g. `cat file | for line in sys.stdin: ...`). **Python scripts on PATH**: if `program` is not found but `program.py` is, pyshell runs it (``program.`` also resolves to ``program.py``). **History** (persistent in `~/.pyshell_history`) and **last exit code** (`last_exit_code`). **Scripts**: `pyshell script.psh`.
 - **Startup config**: Put commands or Python in `~/.pyshellrc` or `./.pyshellrc`; they run automatically when the REPL starts.
 - **Glob expansion**: Command arguments like `*.py` or `src/**/*.py` are expanded to matching paths.
 - **~ expansion**: `~` and `~user` in command arguments expand to home directories (e.g. `cd ~`, `cat ~/.pyshellrc`).

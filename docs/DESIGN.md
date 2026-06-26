@@ -25,6 +25,7 @@ pyshell is a command-line shell that accepts both **Python-like code** and **she
 | **builtins** | Implementations of built-in commands (mkdir, cat, echo, ls/dir on Windows) and factory for Python-callable builtins (cd, pwd, run, help, etc.). |
 | **expansion** | Expand `$VAR`/`${VAR}` and `~` in strings; glob expansion for argv. Used by executor before running commands and for redirect paths. |
 | **subprocess_env** | Build environment dict for child processes (strip mismatched ``VIRTUAL_ENV`` after ``cd``). |
+| **command_resolve** | Resolve command names on PATH; ``program`` / ``program.`` → ``program.py`` when needed. |
 
 ### 2.2 Data flow (single line)
 
@@ -71,7 +72,7 @@ pyshell is a command-line shell that accepts both **Python-like code** and **she
 
 ### 4.2 Commands
 
-- **executor.run_command**: Expand argv and redirect paths (expansion module); then: builtins (type, which, cd, pwd, exit, alias, jobs, fg, bg, prompt, pushd, popd, dirs, source, history, true, false, mkdir, and on Windows ls/dir/cat/echo) are handled inline; else **builtins.run_builtin_command** for Python-callable builtins; else resolve command via PATH and run subprocess. Child processes receive **subprocess_env()** (copy of the environment with ``VIRTUAL_ENV`` dropped when it does not match ``<cwd>/.venv``, so tools like ``uv`` are not confused after ``cd`` to another project). Redirects applied by `_apply_redirects` (files or here-string pipe for `<<<`). **cd** and **pushd** treat all arguments as a single path (joined by spaces) so directories with spaces work whether quoted or not. **get_prompt** returns the prompt with placeholders expanded; paths (cwd, base) use normal space and come from `os.getcwd()` (symlinks are resolved, so the prompt shows the target directory name). The shell writes the full prompt with `sys.stdout.write` before reading input so prompts containing spaces (e.g. cwd `Local Settings`) are never truncated.
+- **executor.run_command**: Expand argv and redirect paths (expansion module); then: builtins (type, which, cd, pwd, exit, alias, jobs, fg, bg, prompt, pushd, popd, dirs, source, history, true, false, mkdir, and on Windows ls/dir/cat/echo) are handled inline; else **builtins.run_builtin_command** for Python-callable builtins; else **command_resolve.resolve_command_argv** (PATH lookup: ``program`` then ``program.py``; ``program.`` → ``program.py``; non-executable ``.py`` runs via ``sys.executable``) and run subprocess. Child processes receive **subprocess_env()** (copy of the environment with ``VIRTUAL_ENV`` dropped when it does not match ``<cwd>/.venv``, so tools like ``uv`` are not confused after ``cd`` to another project). Redirects applied by `_apply_redirects` (files or here-string pipe for `<<<`). **cd** and **pushd** treat all arguments as a single path (joined by spaces) so directories with spaces work whether quoted or not. **get_prompt** returns the prompt with placeholders expanded; paths (cwd, base) use normal space and come from `os.getcwd()` (symlinks are resolved, so the prompt shows the target directory name). The shell writes the full prompt with `sys.stdout.write` before reading input so prompts containing spaces (e.g. cwd `Local Settings`) are never truncated.
 
 ### 4.3 Redirects
 

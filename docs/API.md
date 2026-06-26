@@ -161,7 +161,8 @@ Embedded `\n` from recalled history skips steps 1–3. Pipeline lines with unquo
 | **_run_builtin_kill(args, jobs, set_exit_code)** | kill [-signal] pid \| %jobid [...]. |
 | **_is_expression_statement(tree)** → bool | True if AST is single expression. |
 | **_is_bare_name(tree)** → bool | True if AST is single Name. |
-| **_resolve_command_argv(argv)** → list \| None | Resolve command via PATH; None if not found. |
+
+Command PATH resolution lives in **pyshell.command_resolve** (see below).
 
 ---
 
@@ -170,6 +171,16 @@ Embedded `\n` from recalled history skips steps 1–3. Pipeline lines with unquo
 | Function | Description |
 |----------|-------------|
 | **subprocess_env()** → dict[str, str] | Copy of ``os.environ`` for child processes; drops ``VIRTUAL_ENV`` when it does not match ``<cwd>/.venv``. |
+
+---
+
+## pyshell.command_resolve
+
+| Function | Description |
+|----------|-------------|
+| **path_lookup_names(name)** → list[str] | Ordered PATH names to try (``program`` → ``program``, ``program.py``; ``program.`` → ``program.py``). |
+| **resolve_command_argv(argv, \*, path_env=None)** → list \| None | Resolve ``argv[0]``; non-executable ``.py`` on PATH runs via ``sys.executable``. |
+| **lookup_command(name, \*, path_env=None)** → str \| None | Path for ``which`` / ``type`` (script path when run via Python). |
 
 ---
 
