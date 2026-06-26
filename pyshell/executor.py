@@ -30,6 +30,7 @@ from pyshell.builtins import (
 )
 from pyshell.expansion import expand_command_argv, expand_redirect_path
 from pyshell.parser import parse_line
+from pyshell.subprocess_env import subprocess_env
 
 # Type for redirect list: (op, path or None for 2>&1)
 Redirects = list[tuple[str, str | None]]
@@ -459,7 +460,7 @@ class Executor:
                 popen_kwargs: dict[str, Any] = {
                     "args": argv,
                     "shell": False,
-                    "env": os.environ,
+                    "env": subprocess_env(),
                     "stdout": stdout_f or subprocess.DEVNULL,
                     "stderr": stderr_f if not stderr_to_stdout else subprocess.STDOUT,
                     "stdin": stdin_f or subprocess.DEVNULL,
@@ -506,7 +507,7 @@ class Executor:
                 proc = subprocess.run(
                     argv,
                     shell=False,
-                    env=os.environ,
+                    env=subprocess_env(),
                     stdout=subprocess.PIPE if use_pipe_stdout else out_target,
                     stderr=subprocess.STDOUT if stderr_to_stdout else (
                         subprocess.PIPE if use_pipe_stderr else err_target
@@ -647,7 +648,7 @@ class Executor:
                         stdin=proc_stdin,
                         stdout=proc_stdout,
                         stderr=proc_stderr,
-                        env=os.environ,
+                        env=subprocess_env(),
                         text=True,
                     )
                     if last_stdout is not None and proc_stdin == subprocess.PIPE:
@@ -861,7 +862,7 @@ def _run_foreground_with_job_control(
     proc = subprocess.Popen(
         argv,
         shell=False,
-        env=os.environ,
+        env=subprocess_env(),
         stdout=out_target,
         stderr=err_target,
         stdin=stdin_f or _safe_stdin(),

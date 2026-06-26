@@ -36,14 +36,16 @@ def _pyshell_subprocess_argv(inner: str) -> list[str]:
     return argv
 
 
-def _pyshell_subprocess_env() -> dict[str, str] | None:
-    """Return env for subshell child, or None to inherit os.environ unchanged."""
+def _pyshell_subprocess_env() -> dict[str, str]:
+    """Return env for subshell child with mismatched VIRTUAL_ENV stripped."""
+    from pyshell.subprocess_env import subprocess_env
+
+    env = subprocess_env()
     if sys.version_info >= (3, 11):
-        return None
+        return env
     import pyshell
 
     pkg_parent = os.path.dirname(os.path.dirname(pyshell.__file__))
-    env = os.environ.copy()
     prefix = env.get("PYTHONPATH", "")
     env["PYTHONPATH"] = pkg_parent + (os.pathsep + prefix if prefix else "")
     return env

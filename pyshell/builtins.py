@@ -11,6 +11,8 @@ import sys
 from datetime import datetime
 from typing import TYPE_CHECKING, Any, Callable
 
+from pyshell.subprocess_env import subprocess_env
+
 if TYPE_CHECKING:
     from pyshell.shell import Shell
 
@@ -443,7 +445,7 @@ def make_builtins(
         if not args:
             print("run(cmd, *args): at least one argument required", file=sys.stderr)
             return 1
-        result = subprocess.run(list(args))
+        result = subprocess.run(list(args), env=subprocess_env())
         return result.returncode
 
     def run_capture(*args: str) -> tuple[str, str, int]:
@@ -454,6 +456,7 @@ def make_builtins(
             list(args),
             capture_output=True,
             text=True,
+            env=subprocess_env(),
         )
         return (r.stdout or "", r.stderr or "", r.returncode)
 

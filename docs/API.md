@@ -165,6 +165,14 @@ Embedded `\n` from recalled history skips steps 1–3. Pipeline lines with unquo
 
 ---
 
+## pyshell.subprocess_env
+
+| Function | Description |
+|----------|-------------|
+| **subprocess_env()** → dict[str, str] | Copy of ``os.environ`` for child processes; drops ``VIRTUAL_ENV`` when it does not match ``<cwd>/.venv``. |
+
+---
+
 ## pyshell.builtins
 
 ### Constants
