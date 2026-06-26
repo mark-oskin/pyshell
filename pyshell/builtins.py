@@ -77,9 +77,8 @@ Examples:
     passed literally (e.g. in Python strings use '...' or escape as needed).""",
     "windows": """Windows vs Unix:
 
-  • Line editing: pyshell uses a built-in cross-platform line editor (Up/Down
-    for history, Left/Right and Home/End for cursor, Ctrl+A/Ctrl+E, Tab
-    completion). Prompts with spaces in the cwd are shown in full.
+  • Line editing: **prompt_toolkit** provides readline-style editing (Emacs keys,
+    history, tab completion) on all platforms including macOS and Windows.
   • History: Command history is saved to ~/.pyshell_history on exit and loaded
     at startup (same path on Windows: your user profile directory).
   • Commands: On Windows, ls, dir, cat, and echo are built in when not on PATH.

@@ -7,6 +7,7 @@ import unittest
 import unittest.mock
 from contextlib import redirect_stdout
 
+from pyshell.line_reader import IterableKeySource
 from pyshell.shell import Shell, run_script, main
 
 
@@ -268,6 +269,15 @@ class TestPipelinePython(unittest.TestCase):
             self.assertIn("done", out.getvalue())
         finally:
             os.unlink(path)
+
+    def test_history_recall_multiline_pipeline(self):
+        """Multi-line history from _read_editable is passed through without continuation."""
+        shell = Shell()
+        shell.executor.set_exit_callback(lambda code: None)
+        entry = f"cat README.md |for f in sys.stdin: print(f)\nprint('done')"
+        with unittest.mock.patch.object(shell, "_read_editable", return_value=entry):
+            line = shell._read_line()
+        self.assertEqual(line, entry)
 
 
 class TestConditionalExecution(unittest.TestCase):

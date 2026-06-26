@@ -19,7 +19,7 @@ pyshell is a command-line shell that accepts both **Python-like code** and **she
 | Module | Role |
 |--------|------|
 | **shell** | Entry point (`main`), REPL loop (`Shell`), line reading (built-in line editor), history load/save, startup config (`.pyshellrc`), and orchestration: parses line → dispatches to executor. |
-| **line_reader** | Cross-platform TTY line editor: cursor movement, history (Up/Down), tab completion callback, raw-mode input on Unix, `msvcrt` on Windows. |
+| **line_reader** | TTY input via **prompt_toolkit** (readline-style editing); pipe fallback uses ``readline()``. |
 | **parser** | Classify line (Python vs command vs pipeline vs conditional), split pipelines and conditionals, tokenize command lines and extract redirects/background. No execution. |
 | **executor** | Run Python (`run_python`), run builtins and external commands (`run_command`), run pipelines (`run_pipeline`), apply redirects, manage namespace, aliases, jobs, prompt, directory stack. |
 | **builtins** | Implementations of built-in commands (mkdir, cat, echo, ls/dir on Windows) and factory for Python-callable builtins (cd, pwd, run, help, etc.). |
@@ -90,9 +90,10 @@ pyshell is a command-line shell that accepts both **Python-like code** and **she
 
 ### 5.2 Line reading
 
-- **line_reader.read_editable_line**: Cross-platform TTY editor used for the main prompt and `...` continuation prompts. Writes the prompt with `sys.stdout.write`, then reads keys in raw mode (Unix) or via `msvcrt` (Windows). Uses `\r\n` for newlines in raw TTY mode so the cursor returns to column 0 (LF-only leaves the cursor mid-row and breaks the next prompt). Supports Enter, Ctrl+C, Ctrl+D/Ctrl+Z (EOF), Up/Down (history), Left/Right, Home/End, Ctrl+A/Ctrl+E, Backspace/DEL, Tab (via **Shell._get_completions** callback), and printable insert at the cursor. Non-TTY stdin falls back to `sys.stdin.readline()`.
-- **shell._read_editable** / **_read_line**: Wrap the line editor; handle trailing `\`, unclosed delimiters, and incomplete Python blocks with `...` continuations.
-- **executor.run_pipeline**: Pipeline stages whose text is valid Python (e.g. `cat f | for line in sys.stdin:`) run as Python with stdin wired from the previous stage's stdout. Output from a Python last stage is written to stdout (or redirect target).
+- **prompt_toolkit** drives interactive input on TTYs: standard Emacs/readline keybindings (Ctrl+A/E/K/U/W/D, history, completion), cross-platform (including macOS libedit quirks avoided). pyshell writes the full prompt string itself (so paths with spaces display correctly) and passes it to ``PromptSession.prompt()``.
+- **line_reader.read_editable_line**: Wraps prompt_toolkit; non-TTY stdin uses plain ``readline()``. Tab completion calls **Shell._get_completions**. Persistent history is loaded into an ``InMemoryHistory`` each read from **Shell._history**; entries are still saved to ``~/.pyshell_history`` on exit.
+- **shell._read_editable** / **_read_line**: Wrap the line reader; handle trailing `\`, unclosed delimiters, and incomplete Python blocks with `...` continuations. Recalled multi-line history (embedded `\n`) is submitted as-is.
+- **executor.run_pipeline**: Pipeline stages whose text is valid Python run as Python with stdin wired from the previous stage's stdout.
 
 ### 5.3 History persistence
 
@@ -110,8 +111,8 @@ pyshell is a command-line shell that accepts both **Python-like code** and **she
 
 ## 7. Platform behavior
 
-- **Windows**: Builtins `ls`, `dir`, `cat`, `echo` are implemented in **builtins** so they work without PATH. Line editing uses the same **line_reader** module as Unix. `~` and PATH resolution use OS APIs (e.g. `os.path.expanduser`, `shutil.which`).
-- **Unix**: External `ls`/`cat`/etc. from PATH; line editing via **line_reader** (raw TTY mode, not libedit/GNU readline).
+- **Windows**: Builtins `ls`, `dir`, `cat`, `echo` are implemented in **builtins** so they work without PATH. Line editing uses **prompt_toolkit** (same as Unix).
+- **Unix/macOS**: External `ls`/`cat`/etc. from PATH; line editing via **prompt_toolkit** (not raw TTY or libedit bindings).
 
 ---
 

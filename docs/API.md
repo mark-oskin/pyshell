@@ -61,7 +61,7 @@ Exposed as `shell` in the Python namespace. **Script API** for Python code and p
 | **_eval(line)** | Evaluate one logical line (conditionals, Python, command, pipeline). |
 | **_eval_conditional(segments, redirects, background)** | Run &&/|| chain. |
 | **_eval_one(cmd_line, redirects, background)** | Dispatch to Python or run_command/run_pipeline. |
-| **_read_editable(prompt)** → str \| None | Read one line with the built-in line editor. |
+| **_read_editable(prompt)** → str \| None | Read one line with the prompt_toolkit (TTY). |
 | **_read_line()** → str \| None | Read one line with continuation. |
 | **get_history()** → list[str] | Return history list (for history builtin). |
 | **request_exit(code)** | Set _running=False and raise SystemExit. |
@@ -72,10 +72,9 @@ Exposed as `shell` in the Python namespace. **Script API** for Python code and p
 
 | Function | Description |
 |----------|-------------|
-| **read_editable_line(prompt, \*, history, complete, key_source=None)** → str \| None | Read one edited line on a TTY; plain readline on pipes. |
+| **read_editable_line(prompt, \*, history, complete, key_source=None)** → str \| None | TTY: prompt_toolkit; pipe: ``readline()``; tests: ``key_source``. |
 | **word_at_cursor(line, cursor)** → tuple[str, int] | Word ending at cursor and its start index. |
 | **apply_completion(line, pos, replacement, \*, append_space=True)** → tuple[str, int] | Replace word at cursor with completion. |
-| **redraw_line(prompt, line, pos)** → None | Rewrite prompt + line and reposition cursor. |
 | **IterableKeySource** | Test helper: feed normalized key events from an iterable. |
 
 ---

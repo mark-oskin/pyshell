@@ -208,7 +208,7 @@ Examples: `prompt("{user}@{hostname} {base} $ ")`, `prompt("[{time}] >>> ")`.
 
 ### Windows vs Unix
 
-- **Line editing**: pyshell uses a built-in cross-platform line editor (not GNU readline/libedit): Up/Down for history, Left/Right and Home/End for cursor movement, Ctrl+A / Ctrl+E for start/end of line, and Tab for completion. Prompts containing spaces (e.g. cwd `Local Settings`) display correctly.
+- **Line editing**: Interactive input uses **prompt_toolkit** (standard readline-style keys: Ctrl+A/E/K/U/W/D, history search, tab completion). Works consistently on macOS, Linux, and Windows. Prompts containing spaces (e.g. cwd `Local Settings`) display correctly.
 - **History**: Command history is saved to `~/.pyshell_history` on exit and loaded at startup (on Windows, `~` is your user profile directory). The last 2000 entries are kept.
 - **Commands**: On Windows, `ls`, `dir`, `cat`, and `echo` are built in when not on PATH. On Unix they are run from PATH. `mkdir -p` is built in on all platforms.
 

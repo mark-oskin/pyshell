@@ -653,7 +653,7 @@ class Shell:
         self.executor._set_exit_code(proc.returncode if proc.returncode is not None else 0)
 
     def _read_editable(self, prompt: str) -> str | None:
-        """Read one edited line using the built-in line editor."""
+        """Read one edited line (prompt_toolkit on TTYs)."""
         return read_editable_line(
             prompt,
             history=self._history,
@@ -670,6 +670,8 @@ class Shell:
                 return None
         except EOFError:
             return None
+        if "\n" in line:
+            return line
         while line.endswith("\\"):
             line = line[:-1]
             try:
