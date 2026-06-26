@@ -11,9 +11,9 @@ Numbered for reference. Priorities are suggestions.
 
 ---
 
-## Line editing (Windows fallback)
+## Line editing
 
-3. **History search** – e.g. Ctrl+R in Windows fallback (on Unix depends on readline).
+1. **History search** – e.g. Ctrl+R reverse search in the built-in line editor.
 
 ---
 

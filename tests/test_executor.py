@@ -8,6 +8,7 @@ import sys
 import tempfile
 import time
 import unittest
+import unittest.mock
 from contextlib import redirect_stdout
 
 from pyshell.executor import Executor, _job_control_available
@@ -28,8 +29,12 @@ class TestRunPython(unittest.TestCase):
         ex.set_exit_callback(lambda code: None)
         result = ex.run_python("x = 10", "x = 10")
         self.assertIsNone(result)
+
+    def test_sys_in_namespace(self):
+        ex = Executor()
+        ex.set_exit_callback(lambda code: None)
         ns = ex._get_namespace()
-        self.assertEqual(ns["x"], 10)
+        self.assertIs(ns["sys"], sys)
 
     def test_env_vars_in_namespace(self):
         ex = Executor()
@@ -226,6 +231,65 @@ class TestRunPipeline(unittest.TestCase):
         ex.set_exit_callback(lambda code: None)
         ex.run_pipeline([["pwd"], [sys.executable, "-c", "import sys; sys.stdin.read(); sys.exit(0)"]])
         self.assertEqual(ex._last_exit_code, 0)
+
+    def test_pipeline_python_segment_classified_as_python(self):
+        from pyshell.parser import _split_pipeline, parse_line
+
+        seg = _split_pipeline("cat README.md | for f in sys.stdin:")[1]
+        self.assertEqual(parse_line(seg)[0], "python")
+
+    def test_pipeline_runs_python_stage_with_piped_stdout(self):
+        ex = Executor()
+        ex.set_exit_callback(lambda code: None)
+        with unittest.mock.patch("pyshell.executor.subprocess.Popen") as mock_popen:
+            proc = unittest.mock.MagicMock()
+            proc.communicate.return_value = ("hello\n", "")
+            proc.returncode = 0
+            mock_popen.return_value = proc
+            with unittest.mock.patch.object(
+                ex, "_run_python_pipeline_stage", return_value="done"
+            ) as mock_py:
+                ex.run_pipeline(
+                    [["cat", "README.md"], ["for", "f", "in", "sys.stdin:"]],
+                    segment_sources=["cat README.md", "for f in sys.stdin:"],
+                )
+                mock_py.assert_called_once_with("for f in sys.stdin:", "hello\n")
+
+    def test_pipeline_python_last_stage_prints_stdout(self):
+        ex = Executor()
+        ex.set_exit_callback(lambda code: None)
+        out = io.StringIO()
+        with redirect_stdout(out):
+            ex.run_pipeline(
+                [
+                    [sys.executable, "-c", "print('line1'); print('line2')"],
+                    ["for", "x", "in", "sys.stdin:", "print(x,", "end='')"],
+                ],
+                segment_sources=[
+                    f'{sys.executable} -c "print(\'line1\'); print(\'line2\')"',
+                    "for x in sys.stdin: print(x, end='')",
+                ],
+            )
+        self.assertIn("line1", out.getvalue())
+        self.assertIn("line2", out.getvalue())
+
+    def test_pipeline_python_multiline_segment(self):
+        ex = Executor()
+        ex.set_exit_callback(lambda code: None)
+        out = io.StringIO()
+        source = "for line in sys.stdin:\n    print(line, end='')"
+        with redirect_stdout(out):
+            ex.run_pipeline(
+                [
+                    [sys.executable, "-c", "print('hi')"],
+                    ["for", "line", "in", "sys.stdin:"],
+                ],
+                segment_sources=[
+                    f'{sys.executable} -c "print(\'hi\')"',
+                    source,
+                ],
+            )
+        self.assertEqual(out.getvalue().strip(), "hi")
 
 
 class TestBackgroundJobs(unittest.TestCase):

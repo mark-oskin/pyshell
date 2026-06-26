@@ -18,7 +18,8 @@ pyshell is a command-line shell that accepts both **Python-like code** and **she
 
 | Module | Role |
 |--------|------|
-| **shell** | Entry point (`main`), REPL loop (`Shell`), line reading (readline vs Windows fallback), history load/save, startup config (`.pyshellrc`), and orchestration: parses line → dispatches to executor. |
+| **shell** | Entry point (`main`), REPL loop (`Shell`), line reading (built-in line editor), history load/save, startup config (`.pyshellrc`), and orchestration: parses line → dispatches to executor. |
+| **line_reader** | Cross-platform TTY line editor: cursor movement, history (Up/Down), tab completion callback, raw-mode input on Unix, `msvcrt` on Windows. |
 | **parser** | Classify line (Python vs command vs pipeline vs conditional), split pipelines and conditionals, tokenize command lines and extract redirects/background. No execution. |
 | **executor** | Run Python (`run_python`), run builtins and external commands (`run_command`), run pipelines (`run_pipeline`), apply redirects, manage namespace, aliases, jobs, prompt, directory stack. |
 | **builtins** | Implementations of built-in commands (mkdir, cat, echo, ls/dir on Windows) and factory for Python-callable builtins (cd, pwd, run, help, etc.). |
@@ -26,7 +27,7 @@ pyshell is a command-line shell that accepts both **Python-like code** and **she
 
 ### 2.2 Data flow (single line)
 
-1. **shell**: User input → `_read_line()` (readline or Windows fallback) → optional continuation until line complete.
+1. **shell**: User input → `_read_line()` (built-in line editor) → optional continuation until line complete.
 2. **shell**: `_eval(line)` → if conditional (`&&`/`||`), split and evaluate segments; else `_eval_one(cmd_line, redirects, background)`.
 3. **shell**: `_eval_one` uses **parser**: `parse_line(line)` → `("python" \| "command" \| "pipeline", payload)`. If the line has unquoted redirects/background, **parser** `parse_redirects(line)` yields `(argv, redirects, background)`; otherwise line may be run as Python.
 4. **executor**: For Python: `run_python(source, line)` (AST parse, eval/exec in namespace). For command: `run_command(argv, redirects, background)`. For pipeline: `run_pipeline(segments, redirects, background)`.
@@ -69,7 +70,7 @@ pyshell is a command-line shell that accepts both **Python-like code** and **she
 
 ### 4.2 Commands
 
-- **executor.run_command**: Expand argv and redirect paths (expansion module); then: builtins (type, which, cd, pwd, exit, alias, jobs, fg, bg, prompt, pushd, popd, dirs, source, history, true, false, mkdir, and on Windows ls/dir/cat/echo) are handled inline; else **builtins.run_builtin_command** for Python-callable builtins; else resolve command via PATH and run subprocess. Redirects applied by `_apply_redirects` (files or here-string pipe for `<<<`). **cd** and **pushd** treat all arguments as a single path (joined by spaces) so directories with spaces work whether quoted or not. **get_prompt** returns the prompt with placeholders expanded; paths (cwd, base) use normal space and come from `os.getcwd()` (symlinks are resolved, so the prompt shows the target directory name). The shell **always** uses the **fallback** line reader for the main prompt: it writes the full prompt with `sys.stdout.write` then calls `input()` with no argument, so readline never receives the prompt and cannot truncate it (GNU readline on Linux/WSL truncates the prompt at the first space).
+- **executor.run_command**: Expand argv and redirect paths (expansion module); then: builtins (type, which, cd, pwd, exit, alias, jobs, fg, bg, prompt, pushd, popd, dirs, source, history, true, false, mkdir, and on Windows ls/dir/cat/echo) are handled inline; else **builtins.run_builtin_command** for Python-callable builtins; else resolve command via PATH and run subprocess. Redirects applied by `_apply_redirects` (files or here-string pipe for `<<<`). **cd** and **pushd** treat all arguments as a single path (joined by spaces) so directories with spaces work whether quoted or not. **get_prompt** returns the prompt with placeholders expanded; paths (cwd, base) use normal space and come from `os.getcwd()` (symlinks are resolved, so the prompt shows the target directory name). The shell writes the full prompt with `sys.stdout.write` before reading input so prompts containing spaces (e.g. cwd `Local Settings`) are never truncated.
 
 ### 4.3 Redirects
 
@@ -89,8 +90,9 @@ pyshell is a command-line shell that accepts both **Python-like code** and **she
 
 ### 5.2 Line reading
 
-- If **readline** is available: write the prompt with `sys.stdout.write`, then `input()` (no prompt arg) so libedit/GNU readline handles editing, history, and Tab completion. **Shell._setup_completion** binds both `tab: complete` (GNU) and `bind ^I rl_complete` (libedit/macOS).
-- Else on Windows: **shell._read_line_fallback**: key-by-key with `msvcrt.getwch()`; maintains `line` and cursor `pos`; handles Enter, Ctrl+C, Ctrl+Z, Up/Down (history), Left/Right, Home/End, Ctrl+A/Ctrl+E, Backspace, Tab (completion), and printable insert. No readline dependency.
+- **line_reader.read_editable_line**: Cross-platform TTY editor used for the main prompt and `...` continuation prompts. Writes the prompt with `sys.stdout.write`, then reads keys in raw mode (Unix) or via `msvcrt` (Windows). Uses `\r\n` for newlines in raw TTY mode so the cursor returns to column 0 (LF-only leaves the cursor mid-row and breaks the next prompt). Supports Enter, Ctrl+C, Ctrl+D/Ctrl+Z (EOF), Up/Down (history), Left/Right, Home/End, Ctrl+A/Ctrl+E, Backspace/DEL, Tab (via **Shell._get_completions** callback), and printable insert at the cursor. Non-TTY stdin falls back to `sys.stdin.readline()`.
+- **shell._read_editable** / **_read_line**: Wrap the line editor; handle trailing `\`, unclosed delimiters, and incomplete Python blocks with `...` continuations.
+- **executor.run_pipeline**: Pipeline stages whose text is valid Python (e.g. `cat f | for line in sys.stdin:`) run as Python with stdin wired from the previous stage's stdout. Output from a Python last stage is written to stdout (or redirect target).
 
 ### 5.3 History persistence
 
@@ -101,15 +103,15 @@ pyshell is a command-line shell that accepts both **Python-like code** and **she
 ## 6. Startup and configuration
 
 - **main()**: Parses argv for `-c`, `-h`, `--no-rc`, `-v`, script path. Creates **Shell**, wires callbacks (exit, history, shell helper), then either runs `-c` command, script file, or **Shell.run()**.
-- **Shell.run**: Registers completion if readline present; runs **Shell._run_startup_config** (`.pyshellrc` from cwd or home); prints banner; loads history; runs main loop; saves history on exit.
+- **Shell.run**: Runs **Shell._run_startup_config** (`.pyshellrc` from cwd or home); prints banner; loads history; runs main loop; saves history on exit.
 - **Shell._run_file_in_current_shell** (used by source/.): Runs file in same namespace, line-by-line with continuation; used for `.pyshellrc` and `source file`.
 
 ---
 
 ## 7. Platform behavior
 
-- **Windows**: If readline not available, `_read_line_fallback` is used. Builtins `ls`, `dir`, `cat`, `echo` are implemented in **builtins** so they work without PATH. `~` and PATH resolution use OS APIs (e.g. `os.path.expanduser`, `shutil.which`).
-- **Unix**: readline used when importable; external `ls`/`cat`/etc. from PATH.
+- **Windows**: Builtins `ls`, `dir`, `cat`, `echo` are implemented in **builtins** so they work without PATH. Line editing uses the same **line_reader** module as Unix. `~` and PATH resolution use OS APIs (e.g. `os.path.expanduser`, `shutil.which`).
+- **Unix**: External `ls`/`cat`/etc. from PATH; line editing via **line_reader** (raw TTY mode, not libedit/GNU readline).
 
 ---
 

@@ -50,12 +50,10 @@ Exposed as `shell` in the Python namespace. **Script API** for Python code and p
 | **_run_file_in_current_shell(path)** | Run script in current namespace (source / .pyshellrc). |
 | **_run_startup_config()** | Run .pyshellrc from cwd or home if present. |
 | **_print_banner()** | Print startup banner. |
-| **_add_history(line)** | Append line to history and readline (if available). |
+| **_add_history(line)** | Append line to in-memory history. |
 | **_load_history()** | Load history from ~/.pyshell_history. |
 | **_save_history()** | Write history to ~/.pyshell_history (last 2000 entries). |
-| **_setup_completion()** | Register readline completer. |
-| **_completer(text, state)** | Readline completer callback. |
-| **_get_completions(text)** → list[str] | Tab completion list (commands, paths, $vars). |
+| **_get_completions(line, cursor)** → list[str] | Tab completion list (commands, paths, $vars) for word at cursor. |
 | **_has_unclosed_delimiters(text)** → bool | True if more input needed (unclosed quotes/brackets). |
 | **_find_matching_paren(s, open_idx)** → int | Index of matching ')'; -1 if not found. |
 | **_is_subshell(line)** → bool | True if line is ( ... ) subshell form. |
@@ -63,10 +61,22 @@ Exposed as `shell` in the Python namespace. **Script API** for Python code and p
 | **_eval(line)** | Evaluate one logical line (conditionals, Python, command, pipeline). |
 | **_eval_conditional(segments, redirects, background)** | Run &&/|| chain. |
 | **_eval_one(cmd_line, redirects, background)** | Dispatch to Python or run_command/run_pipeline. |
-| **_read_line_fallback(prompt)** → str \| None | Windows key-by-key line input with history and cursor. |
+| **_read_editable(prompt)** → str \| None | Read one line with the built-in line editor. |
 | **_read_line()** → str \| None | Read one line with continuation. |
 | **get_history()** → list[str] | Return history list (for history builtin). |
 | **request_exit(code)** | Set _running=False and raise SystemExit. |
+
+---
+
+## pyshell.line_reader
+
+| Function | Description |
+|----------|-------------|
+| **read_editable_line(prompt, \*, history, complete, key_source=None)** → str \| None | Read one edited line on a TTY; plain readline on pipes. |
+| **word_at_cursor(line, cursor)** → tuple[str, int] | Word ending at cursor and its start index. |
+| **apply_completion(line, pos, replacement, \*, append_space=True)** → tuple[str, int] | Replace word at cursor with completion. |
+| **redraw_line(prompt, line, pos)** → None | Rewrite prompt + line and reposition cursor. |
+| **IterableKeySource** | Test helper: feed normalized key events from an iterable. |
 
 ---
 
@@ -109,7 +119,7 @@ Exposed as `shell` in the Python namespace. **Script API** for Python code and p
 | **get_jobs()** → list[dict] | Snapshot of job list: id, cmd, status ('running'\|'stopped'\|'done'), pid. |
 | **run_python(source, original_line)** | Execute Python source; return value for expressions. |
 | **run_command(argv, redirects, background)** | Run one command (builtin or external). |
-| **run_pipeline(segments, redirects, background)** | Run pipeline; redirects on last stage. |
+| **run_pipeline(segments, redirects, background, segment_sources=None)** | Run pipeline; redirects on last stage. Python stages run when `segment_sources` text is valid Python. |
 
 #### Jobs and job control
 

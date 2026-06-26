@@ -6,6 +6,7 @@ via run_command and run_pipeline. Redirects are applied in _apply_redirects.
 """
 
 import ast
+import io
 import os
 import shutil
 import signal
@@ -28,6 +29,7 @@ from pyshell.builtins import (
     run_mkdir,
 )
 from pyshell.expansion import expand_command_argv, expand_redirect_path
+from pyshell.parser import parse_line
 
 # Type for redirect list: (op, path or None for 2>&1)
 Redirects = list[tuple[str, str | None]]
@@ -104,6 +106,8 @@ class Executor:
             )
         if "PATH" not in self._namespace:
             self._namespace.update(os.environ)
+        if "sys" not in self._namespace:
+            self._namespace["sys"] = sys
         # Expose last command exit code (updated after each command/pipeline)
         self._namespace["last_exit_code"] = self._last_exit_code
         if self._shell_helper is not None:
@@ -117,7 +121,7 @@ class Executor:
     def get_prompt(self) -> str:
         """Return the current REPL prompt string with placeholders expanded.
 
-        The shell always writes this prompt itself (never passes it to readline),
+        The shell always writes this prompt itself before reading input,
         so paths (cwd, base) use normal space and display correctly.
         """
         try:
@@ -186,6 +190,31 @@ class Executor:
         # Statement(s)
         exec(compile(tree, "<pyshell>", "exec"), ns)
         return None
+
+    def _run_python_pipeline_stage(self, source: str, stdin_text: str | None) -> str:
+        """Run a Python pipeline stage; return captured stdout for the next stage."""
+        enc = getattr(sys.stdout, "encoding", None) or "utf-8"
+        rfd, wfd = os.pipe()
+        out_buf = open(wfd, "w", encoding=enc)  # noqa: SIM115
+        old_stdin = sys.stdin
+        old_stdout = sys.stdout
+        if stdin_text is not None:
+            sys.stdin = io.TextIOWrapper(io.BytesIO(stdin_text.encode(enc)), encoding=enc)
+        sys.stdout = out_buf
+        try:
+            self.run_python(source, source)
+            self._set_exit_code(0)
+        except Exception as e:
+            print(f"Error: {e}", file=sys.stderr)
+            self._set_exit_code(1)
+            return ""
+        finally:
+            out_buf.flush()
+            out_buf.close()
+            sys.stdout = old_stdout
+            sys.stdin = old_stdin
+        with open(rfd, "r", encoding=enc) as inf:
+            return inf.read()
 
     def run_command(
         self,
@@ -515,6 +544,7 @@ class Executor:
         segments: list[list[str]],
         redirects: Redirects | None = None,
         background: bool = False,
+        segment_sources: list[str] | None = None,
     ) -> Any:
         """Run a pipeline; redirects apply to the last stage only.
 
@@ -522,6 +552,7 @@ class Executor:
             segments: List of argv lists (one per stage).
             redirects: Optional; applied to last stage.
             background: If True, run last stage in background.
+            segment_sources: Original segment text per stage (enables Python stages).
 
         Returns:
             Last command output or None.
@@ -540,9 +571,25 @@ class Executor:
         try:
             last_stdout: str | None = None
             last_code = 0
+            last_stage_python = False
             for i, argv in enumerate(segments):
                 if not argv:
                     continue
+                seg_text = (
+                    segment_sources[i].strip()
+                    if segment_sources and i < len(segment_sources)
+                    else ""
+                )
+                if seg_text and parse_line(seg_text)[0] == "python":
+                    last_stdout = self._run_python_pipeline_stage(
+                        seg_text, last_stdout if i > 0 else None
+                    )
+                    last_code = self._last_exit_code
+                    last_stage_python = True
+                    if last_code != 0:
+                        break
+                    continue
+                last_stage_python = False
                 argv = expand_command_argv(argv, env)
                 name, args = argv[0], argv[1:]
                 try:
@@ -635,6 +682,14 @@ class Executor:
                     self._set_exit_code(130)
                     raise
             self._set_exit_code(last_code)
+            if last_stage_python and last_stdout:
+                target = stdout_f if stdout_f is not None else sys.stdout
+                try:
+                    target.write(last_stdout)
+                    if hasattr(target, "flush"):
+                        target.flush()
+                except OSError:
+                    pass
             return None
         except KeyboardInterrupt:
             self._set_exit_code(130)

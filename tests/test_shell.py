@@ -1,9 +1,11 @@
 """Tests for shell: history and script execution."""
 
+import io
 import os
 import tempfile
 import unittest
 import unittest.mock
+from contextlib import redirect_stdout
 
 from pyshell.shell import Shell, run_script, main
 
@@ -76,31 +78,17 @@ class TestAliasExpansion(unittest.TestCase):
 class TestPromptWithSpaces(unittest.TestCase):
     """Prompt containing spaces (e.g. cwd 'Local Settings') must not be truncated when displayed."""
 
-    def test_fallback_writes_full_prompt_and_does_not_pass_prompt_to_input(self):
-        """When msvcrt is None, fallback must write the full prompt and call input() with no arg.
+    def test_editable_line_writes_full_prompt(self):
+        """Built-in editor writes the full prompt (never passes it to input/readline)."""
+        from pyshell.line_reader import IterableKeySource
 
-        Passing the prompt to input() causes readline/C runtime to truncate at the first space,
-        so we write the prompt ourselves and then call input() so the full prompt is displayed.
-        """
-        from pyshell import shell as shell_module
         shell = Shell()
         prompt_with_space = "[Local Settings] >>> "
-        with unittest.mock.patch.object(shell_module, "msvcrt", None):
-            with unittest.mock.patch("builtins.input", side_effect=EOFError()) as mock_input:
-                with unittest.mock.patch.object(
-                    shell_module.sys.stdout, "write", wraps=shell_module.sys.stdout.write
-                ) as mock_write:
-                    try:
-                        shell._read_line_fallback(prompt_with_space)
-                    except EOFError:
-                        pass
-        # Must have written the full prompt ourselves (so it is not truncated by input())
-        mock_write.assert_any_call(prompt_with_space)
-        # Must not pass the prompt to input() so the C layer never truncates it
-        mock_input.assert_called_once()
-        self.assertEqual(
-            mock_input.call_args[0], (), "input() must be called with no arguments so prompt is not truncated"
-        )
+        shell._line_key_source = IterableKeySource(["ENTER"])
+        with unittest.mock.patch("sys.stdin.isatty", return_value=True):
+            with unittest.mock.patch("sys.stdout", new_callable=io.StringIO) as mock_out:
+                shell._read_editable(prompt_with_space)
+        self.assertIn(prompt_with_space, mock_out.getvalue())
 
     def test_prompt_with_cwd_containing_space_shows_full_basename(self):
         """After cd into a dir with a space, get_prompt() includes the full basename."""
@@ -215,35 +203,16 @@ class TestRunScript(unittest.TestCase):
 
 
 class TestTabCompletion(unittest.TestCase):
-    def test_setup_completion_binds_libedit_tab(self):
-        """libedit (macOS) needs bind ^I rl_complete in addition to tab: complete."""
-        shell = Shell()
-        with unittest.mock.patch("pyshell.shell.readline") as m:
-            m.parse_and_bind = unittest.mock.Mock()
-            shell._setup_completion()
-        calls = [c[0][0] for c in m.parse_and_bind.call_args_list]
-        self.assertIn("tab: complete", calls)
-        self.assertIn("bind ^I rl_complete", calls)
-
     def test_get_completions_builtin_prefix(self):
         shell = Shell()
         shell.executor.set_exit_callback(lambda code: None)
-        # Force readline state so we're completing first token with prefix "pw"
-        with unittest.mock.patch("pyshell.shell.readline") as m:
-            m.get_line_buffer.return_value = "pw"
-            m.get_begidx.return_value = 0
-            m.get_endidx.return_value = 2
-            completions = shell._get_completions("pw")
+        completions = shell._get_completions("pw", 2)
         self.assertIn("pwd", completions)
 
     def test_get_completions_empty_prefix(self):
         shell = Shell()
         shell.executor.set_exit_callback(lambda code: None)
-        with unittest.mock.patch("pyshell.shell.readline") as m:
-            m.get_line_buffer.return_value = ""
-            m.get_begidx.return_value = 0
-            m.get_endidx.return_value = 0
-            completions = shell._get_completions("")
+        completions = shell._get_completions("", 0)
         self.assertIn("pwd", completions)
         self.assertIn("exit", completions)
 
@@ -251,27 +220,38 @@ class TestTabCompletion(unittest.TestCase):
         """After 'cat RE', completions should be path names matching RE, not commands."""
         shell = Shell()
         shell.executor.set_exit_callback(lambda code: None)
-        with unittest.mock.patch("pyshell.shell.readline") as m:
-            m.get_line_buffer.return_value = "cat RE"
-            m.get_begidx.return_value = 4
-            m.get_endidx.return_value = 6
-            completions = shell._get_completions("RE")
+        completions = shell._get_completions("cat RE", 6)
         # Should not complete to commands (e.g. run, readline)
         self.assertNotIn("run", completions)
         # Should complete to paths in cwd matching RE (case-insensitive)
         self.assertIn("README.md", completions)
 
-    def test_get_completions_no_line_buffer_includes_paths(self):
-        """When line buffer is empty (e.g. Windows), completing 'RE' still offers path completions."""
+    def test_get_completions_no_line_context_includes_paths(self):
+        """When only a bare prefix is typed, path completions are still offered."""
         shell = Shell()
         shell.executor.set_exit_callback(lambda code: None)
-        with unittest.mock.patch("pyshell.shell.readline") as m:
-            m.get_line_buffer.return_value = ""
-            m.get_begidx.return_value = 0
-            m.get_endidx.return_value = 2
-            completions = shell._get_completions("RE")
-        # Must include path completion (e.g. README.md) when buffer is unavailable
+        completions = shell._get_completions("RE", 2)
         self.assertIn("README.md", completions)
+
+
+class TestPipelinePython(unittest.TestCase):
+    """Pipelines into Python stages receive prior stdout on sys.stdin."""
+
+    def test_cat_pipe_for_loop(self):
+        shell = Shell()
+        shell.executor.set_exit_callback(lambda code: None)
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".txt", delete=False) as f:
+            f.write("hello\nworld\n")
+            path = f.name
+        try:
+            line = f"cat {path} |for f in sys.stdin:\n    print(f)"
+            out = io.StringIO()
+            with redirect_stdout(out):
+                shell._eval(line)
+            self.assertIn("hello", out.getvalue())
+            self.assertIn("world", out.getvalue())
+        finally:
+            os.unlink(path)
 
 
 class TestConditionalExecution(unittest.TestCase):

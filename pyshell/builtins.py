@@ -77,10 +77,9 @@ Examples:
     passed literally (e.g. in Python strings use '...' or escape as needed).""",
     "windows": """Windows vs Unix:
 
-  • Line editing: On Unix, readline is used when available (full line editing,
-    history, completion). On Windows, if readline is not installed, pyshell
-    uses a key-by-key fallback with history (Up/Down), cursor movement
-    (Left/Right, Home/End), Ctrl+A/Ctrl+E, and tab completion.
+  • Line editing: pyshell uses a built-in cross-platform line editor (Up/Down
+    for history, Left/Right and Home/End for cursor, Ctrl+A/Ctrl+E, Tab
+    completion). Prompts with spaces in the cwd are shown in full.
   • History: Command history is saved to ~/.pyshell_history on exit and loaded
     at startup (same path on Windows: your user profile directory).
   • Commands: On Windows, ls, dir, cat, and echo are built in when not on PATH.

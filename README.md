@@ -15,7 +15,7 @@ A command-line shell written in Python with **Python-like syntax**. Use Python e
 - **Redirects**: `> file`, `>> file`, `< file`, `<<< string` (here-string), `2> err`, `2>> err`, `2>&1` (e.g. `echo hi > out.txt`, `cat <<< "hello"`).
 - **Background jobs**: End a command with `&` to run in background; `jobs` to list, `fg` to bring last job to foreground.
 - **Custom prompt**: `prompt(">>> ")` or `prompt("{base} $ ")`; placeholders: `{cwd}`, `{base}`, `{user}`, `{hostname}`, `{time}`, `{exit}`, `{jobs}` (see [Prompt placeholders](#prompt-placeholders)).
-- **Tab completion**: Commands (builtins + PATH), filenames, and variables (when readline is available).
+- **Tab completion**: Commands (builtins + PATH), filenames, and variables.
 - **Pipelines**: `cmd1 | cmd2` (e.g. `pwd | cat`). **History** (persistent in `~/.pyshell_history`) and **last exit code** (`last_exit_code`). **Scripts**: `pyshell script.psh`.
 - **Startup config**: Put commands or Python in `~/.pyshellrc` or `./.pyshellrc`; they run automatically when the REPL starts.
 - **Glob expansion**: Command arguments like `*.py` or `src/**/*.py` are expanded to matching paths.
@@ -208,7 +208,7 @@ Examples: `prompt("{user}@{hostname} {base} $ ")`, `prompt("[{time}] >>> ")`.
 
 ### Windows vs Unix
 
-- **Line editing**: On Unix, pyshell uses **readline** when available (full line editing, history keys, completion). On Windows, if readline is not installed, a key-by-key **fallback** is used: Up/Down for history, Left/Right and Home/End for cursor movement, Ctrl+A / Ctrl+E for start/end of line, and Tab for completion.
+- **Line editing**: pyshell uses a built-in cross-platform line editor (not GNU readline/libedit): Up/Down for history, Left/Right and Home/End for cursor movement, Ctrl+A / Ctrl+E for start/end of line, and Tab for completion. Prompts containing spaces (e.g. cwd `Local Settings`) display correctly.
 - **History**: Command history is saved to `~/.pyshell_history` on exit and loaded at startup (on Windows, `~` is your user profile directory). The last 2000 entries are kept.
 - **Commands**: On Windows, `ls`, `dir`, `cat`, and `echo` are built in when not on PATH. On Unix they are run from PATH. `mkdir -p` is built in on all platforms.
 

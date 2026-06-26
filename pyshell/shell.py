@@ -1,13 +1,14 @@
 """Main REPL and shell orchestration.
 
-Entry point: main(). Shell runs the read-eval loop, line reading (readline or
-Windows fallback), history load/save, and .pyshellrc. It uses the parser to
+Entry point: main(). Shell runs the read-eval loop, line reading (built-in
+line editor), history load/save, and .pyshellrc. It uses the parser to
 classify lines and the executor to run Python or commands/pipelines.
 """
 
 import os
 import subprocess
 import sys
+from pyshell.line_reader import read_editable_line, word_at_cursor
 from pyshell.parser import (
     parse_line,
     parse_redirects,
@@ -15,21 +16,9 @@ from pyshell.parser import (
     has_conditional,
     split_conditional,
     python_block_continuation_needed,
+    _split_pipeline,
 )
 from pyshell.executor import Executor
-
-try:
-    import readline  # noqa: F401 - enables history when available
-except ImportError:
-    readline = None  # type: ignore
-
-if os.name == "nt":
-    try:
-        import msvcrt  # noqa: F401
-    except ImportError:
-        msvcrt = None  # type: ignore
-else:
-    msvcrt = None  # type: ignore
 
 
 def _pyshell_subprocess_argv(inner: str) -> list[str]:
@@ -270,14 +259,14 @@ class Shell:
     """Interactive shell: REPL loop, line reading, history, and eval dispatch.
 
     Uses parser for classification and executor for Python/command/pipeline
-    execution. Handles readline vs Windows fallback and persistent history.
+    execution. Uses the built-in line editor and persistent history.
     """
 
     def __init__(self) -> None:
         self.executor = Executor()
         self._running = True
         self._history: list[str] = []
-        self._completion_matches: list[str] = []
+        self._line_key_source = None  # optional override for tests
 
     def run(self, run_rc: bool = True) -> int:
         """Run the read-eval-print loop. Returns exit code. run_rc=False skips .pyshellrc."""
@@ -285,8 +274,6 @@ class Shell:
         self.executor.set_history_callback(self.get_history)
         self.executor.set_source_callback(self._run_file_in_current_shell)
         self.executor.set_shell_helper(ShellHelper(self))
-        if readline is not None:
-            self._setup_completion()
         if run_rc:
             self._run_startup_config()
         self._print_banner()
@@ -405,15 +392,10 @@ class Shell:
         print()
 
     def _add_history(self, line: str) -> None:
-        """Append line to history and readline (if available)."""
+        """Append line to in-memory history."""
         if not line:
             return
         self._history.append(line)
-        if readline is not None:
-            try:
-                readline.add_history(line)
-            except Exception:
-                pass
 
     _HISTORY_FILENAME = ".pyshell_history"
     _HISTORY_MAX_ENTRIES = 2000
@@ -423,7 +405,7 @@ class Shell:
         return os.path.join(os.path.expanduser("~"), self._HISTORY_FILENAME)
 
     def _load_history(self) -> None:
-        """Load history from file into _history and readline (if available)."""
+        """Load history from file into _history."""
         path = self._history_file_path()
         try:
             with open(path, encoding="utf-8") as f:
@@ -437,20 +419,8 @@ class Shell:
             if not line:
                 continue
             self._history.append(line)
-            if readline is not None:
-                try:
-                    readline.add_history(line)
-                except Exception:
-                    pass
         if len(self._history) > self._HISTORY_MAX_ENTRIES:
             self._history = self._history[-self._HISTORY_MAX_ENTRIES :]
-            if readline is not None:
-                try:
-                    readline.clear_history()
-                    for h in self._history:
-                        readline.add_history(h)
-                except Exception:
-                    pass
 
     def _save_history(self) -> None:
         """Write _history to file (last _HISTORY_MAX_ENTRIES), for persistence."""
@@ -464,53 +434,17 @@ class Shell:
         except OSError:
             pass
 
-    def _setup_completion(self) -> None:
-        """Register tab completer and fix backspace binding for readline."""
-        if readline is None:
-            return
-        readline.set_completer(self._completer)
-        readline.parse_and_bind("tab: complete")
-        # macOS/BSD libedit (common when `import readline` on Darwin) ignores GNU ``tab: complete``.
-        try:
-            readline.parse_and_bind("bind ^I rl_complete")
-        except (TypeError, ValueError):
-            pass
-        # WSL2/Linux: ensure Backspace and DEL both delete backward (avoid \r / prompt wipe).
-        try:
-            readline.parse_and_bind(r'"\C-h": backward-delete-char')   # Ctrl+H (Backspace on some terms)
-            readline.parse_and_bind(r'"\C-?": backward-delete-char')   # DEL (Backspace on many terms)
-        except (TypeError, ValueError):
-            pass
-
-    def _completer(self, text: str, state: int):
-        """Readline completer: (text, state) -> next completion or None."""
-        if state == 0:
-            self._completion_matches = self._get_completions(text)
-        if state < len(self._completion_matches):
-            return self._completion_matches[state]
-        return None
-
-    def _get_completions(self, text: str) -> list[str]:
-        """Return list of completions for the given word."""
-        try:
-            line = readline.get_line_buffer() if readline else ""
-            beg = readline.get_begidx() if readline else 0
-            end = readline.get_endidx() if readline else len(text or "")
-        except Exception:
-            line = ""
-            beg = 0
-            end = len(text or "")
-        raw_word = text if text is not None else (line[beg:end] if beg < len(line) else "")
+    def _get_completions(self, line: str, cursor: int) -> list[str]:
+        """Return list of completions for the word at ``cursor`` in ``line``."""
+        raw_word, beg = word_at_cursor(line, cursor)
         prefix_lower = raw_word.lower() if raw_word else ""
         completions: list[str] = []
         before_cursor = line[:beg]
-        # On Windows (and when readline is a stub), get_line_buffer() often returns "";
-        # then we cannot tell first vs later token, so we merge command + path completions.
         no_line_context = not line.strip() and bool(raw_word)
         tokens_before = before_cursor.strip().split()
         is_first_token = len(tokens_before) == 0
         do_command = is_first_token or (raw_word and raw_word.startswith("$")) or no_line_context
-        do_path = not is_first_token or no_line_context
+        do_path = not is_first_token or no_line_context or bool(raw_word)
 
         if do_command:
             if raw_word and raw_word.startswith("$"):
@@ -718,164 +652,20 @@ class Shell:
             print(proc.stderr, end="", file=sys.stderr)
         self.executor._set_exit_code(proc.returncode if proc.returncode is not None else 0)
 
-    def _read_line_fallback(self, prompt: str) -> str | None:
-        """Read one line key-by-key (Windows fallback when readline unavailable).
-
-        Handles history (Up/Down), cursor (Left/Right, Home/End, Ctrl+A/E),
-        backspace, tab completion, and Ctrl+C/Ctrl+Z.
-
-        Args:
-            prompt: Prompt string already printed by caller.
-
-        Returns:
-            Entered line or None on EOF (Ctrl+Z or Ctrl+D).
-        """
-        if msvcrt is None:
-            # Unix/macOS: write the prompt ourselves (readline truncates at spaces in prompt strings),
-            # then read the line with input("") so libedit/GNU readline still handles editing + Tab.
-            sys.stdout.write(prompt)
-            sys.stdout.flush()
-            try:
-                return input()
-            except EOFError:
-                return None
-        # Windows: key-by-key with msvcrt, our own completion and history (Up/Down)
-        sys.stdout.write(prompt)
-        sys.stdout.flush()
-        line = ""
-        pos = 0  # cursor index in line (0..len(line))
-        history = self._history
-        history_index = len(history)  # beyond last = "current line" being edited
-        current_edit = ""  # line being typed before we started navigating history
-        while True:
-            ch = msvcrt.getwch()
-            if ch in ("\r", "\n"):
-                sys.stdout.write("\n")
-                sys.stdout.flush()
-                return line
-            if ch == "\x03":  # Ctrl+C
-                raise KeyboardInterrupt
-            if ch == "\x1a":  # Ctrl+Z (traditional Windows EOF)
-                raise EOFError
-            if ch == "\x04":  # Ctrl+D (Linux-style EOF; also work on Windows)
-                raise EOFError
-            if ch == "\x01":  # Ctrl+A: beginning of line
-                if pos > 0:
-                    sys.stdout.write("\b" * pos)
-                    sys.stdout.flush()
-                    pos = 0
-                continue
-            if ch == "\x05":  # Ctrl+E: end of line
-                if pos < len(line):
-                    sys.stdout.write(line[pos:])
-                    sys.stdout.flush()
-                    pos = len(line)
-                continue
-            if ch in ("\x00", "\xe0"):  # special key prefix, then scan code
-                scan = msvcrt.getwch()
-                if ch == "\xe0" and scan in ("H", "P"):  # Up=72, Down=80
-                    if scan == "H":  # Up: previous history
-                        if history:
-                            if history_index >= len(history):
-                                current_edit = line
-                            history_index = max(0, history_index - 1)
-                            line = history[history_index]
-                            pos = len(line)
-                            n = len(prompt) + max(len(line), 80)
-                            sys.stdout.write("\r" + " " * n + "\r" + prompt + line)
-                            sys.stdout.flush()
-                    else:  # Down: next history
-                        if history:
-                            history_index = min(len(history), history_index + 1)
-                            if history_index >= len(history):
-                                line = current_edit
-                            else:
-                                line = history[history_index]
-                            pos = len(line)
-                            n = len(prompt) + max(len(line), 80)
-                            sys.stdout.write("\r" + " " * n + "\r" + prompt + line)
-                            sys.stdout.flush()
-                elif ch == "\xe0" and scan == "K":  # Left
-                    if pos > 0:
-                        pos -= 1
-                        sys.stdout.write("\b")
-                        sys.stdout.flush()
-                elif ch == "\xe0" and scan == "M":  # Right
-                    if pos < len(line):
-                        sys.stdout.write(line[pos])
-                        pos += 1
-                        sys.stdout.flush()
-                elif ch == "\xe0" and scan == "G":  # Home
-                    if pos > 0:
-                        sys.stdout.write("\b" * pos)
-                        sys.stdout.flush()
-                        pos = 0
-                elif ch == "\xe0" and scan == "O":  # End
-                    if pos < len(line):
-                        sys.stdout.write(line[pos:])
-                        sys.stdout.flush()
-                        pos = len(line)
-                continue
-            if ch == "\b" or ch == "\x7f":  # backspace
-                if pos > 0:
-                    line = line[: pos - 1] + line[pos:]
-                    pos -= 1
-                    sys.stdout.write("\b")
-                    sys.stdout.write(line[pos:] + " ")
-                    sys.stdout.write("\b" * (len(line) - pos + 1))
-                    sys.stdout.flush()
-                continue
-            if ch == "\t":  # Tab: complete
-                tokens = line.split()
-                word = tokens[-1] if tokens else ""
-                completions = self._get_completions(word)
-                if not completions:
-                    continue
-                if len(completions) == 1:
-                    replacement = completions[0]
-                    if not replacement.endswith(os.sep):
-                        replacement += " "
-                    line = line[: -len(word)] + replacement if word else line + replacement
-                else:
-                    # common prefix
-                    prefix = os.path.commonprefix(completions)
-                    if prefix and prefix != word:
-                        line = line[: -len(word)] + prefix if word else line + prefix
-                    else:
-                        # show list and redraw
-                        sys.stdout.write("\n")
-                        for c in sorted(completions)[:20]:
-                            sys.stdout.write(c + "  ")
-                        sys.stdout.write("\n")
-                        sys.stdout.write(prompt + line)
-                        sys.stdout.flush()
-                        pos = len(line)
-                        continue
-                pos = len(line)
-                n = len(prompt) + len(line)
-                sys.stdout.write("\r" + " " * n + "\r" + prompt + line)
-                sys.stdout.flush()
-                continue
-            # Typing: insert at cursor
-            history_index = len(history)
-            if pos < len(line):
-                line = line[:pos] + ch + line[pos:]
-                pos += 1
-                sys.stdout.write(ch)
-                sys.stdout.write(line[pos:])
-                sys.stdout.write("\b" * (len(line) - pos))
-            else:
-                line += ch
-                pos += 1
-                sys.stdout.write(ch)
-            sys.stdout.flush()
+    def _read_editable(self, prompt: str) -> str | None:
+        """Read one edited line using the built-in line editor."""
+        return read_editable_line(
+            prompt,
+            history=self._history,
+            complete=self._get_completions,
+            key_source=self._line_key_source,
+        )
 
     def _read_line(self) -> str | None:
         r"""Read a line with optional continuation (trailing \ and unclosed delimiters)."""
         try:
             prompt = self.executor.get_prompt()
-            # Write the full prompt ourselves, then input("") — readline/libedit handles line edit + Tab.
-            line = self._read_line_fallback(prompt)
+            line = self._read_editable(prompt)
             if line is None:
                 return None
         except EOFError:
@@ -883,7 +673,7 @@ class Shell:
         while line.endswith("\\"):
             line = line[:-1]
             try:
-                cont = input("... ") if readline is not None else self._read_line_fallback("... ")
+                cont = self._read_editable("... ")
                 if cont is None:
                     return line.strip() or None
                 line += "\n" + cont
@@ -891,7 +681,7 @@ class Shell:
                 return line.strip() or None
         while self._has_unclosed_delimiters(line):
             try:
-                cont = input("... ") if readline is not None else self._read_line_fallback("... ")
+                cont = self._read_editable("... ")
                 if cont is None:
                     return line.strip() or None
                 line += "\n" + cont
@@ -899,7 +689,7 @@ class Shell:
                 return line.strip() or None
         while python_block_continuation_needed(line):
             try:
-                cont = input("... ") if readline is not None else self._read_line_fallback("... ")
+                cont = self._read_editable("... ")
                 if cont is None:
                     return line.strip() or None
                 line += "\n" + cont
@@ -1005,8 +795,23 @@ class Shell:
         if kind == "command":
             return self.executor.run_command(payload, redirects=redirects, background=background)
         if kind == "pipeline":
-            return self.executor.run_pipeline(payload, redirects=redirects, background=background)
+            return self._run_pipeline(line.strip(), payload, redirects, background)
         return None
+
+    def _run_pipeline(
+        self,
+        source_line: str,
+        payload: list[list[str]],
+        redirects: list,
+        background: bool,
+    ):
+        """Run a pipeline, passing original segment text for Python stage detection."""
+        return self.executor.run_pipeline(
+            payload,
+            redirects=redirects,
+            background=background,
+            segment_sources=_split_pipeline(source_line),
+        )
 
     def _eval_conditional(
         self,
@@ -1041,7 +846,7 @@ class Shell:
         if kind == "command":
             return self.executor.run_command(payload, redirects=redirects, background=background)
         if kind == "pipeline":
-            return self.executor.run_pipeline(payload, redirects=redirects, background=background)
+            return self._run_pipeline(cmd_line, payload, redirects, background)
         return None
 
     def get_history(self) -> list[str]:
