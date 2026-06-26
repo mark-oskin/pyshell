@@ -225,6 +225,7 @@ def _split_pipeline(line: str) -> list[str]:
                 i += 2
                 continue
             if c == quote:
+                current.append(c)
                 quote = None
                 i += 1
                 continue

@@ -138,6 +138,12 @@ class TestSplitPipeline(unittest.TestCase):
     def test_three_segments(self):
         self.assertEqual(_split_pipeline("a | b | c"), ["a", "b", "c"])
 
+    def test_preserves_closing_quotes_in_segment(self):
+        line = 'cat f |for x in sys.stdin: print(x)\nprint("done")'
+        segs = _split_pipeline(line)
+        self.assertEqual(segs[1], 'for x in sys.stdin: print(x)\nprint("done")')
+        self.assertEqual(parse_line(segs[1])[0], "python")
+
 
 class TestParseRedirects(unittest.TestCase):
     def test_no_redirects(self):

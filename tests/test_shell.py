@@ -253,6 +253,22 @@ class TestPipelinePython(unittest.TestCase):
         finally:
             os.unlink(path)
 
+    def test_pipe_python_multiline_with_quoted_print_after(self):
+        shell = Shell()
+        shell.executor.set_exit_callback(lambda code: None)
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".txt", delete=False) as f:
+            f.write("a\n")
+            path = f.name
+        try:
+            line = f"cat {path} |for f in sys.stdin: print(f)\nprint('done')"
+            out = io.StringIO()
+            with redirect_stdout(out):
+                shell._eval(line)
+            self.assertIn("a", out.getvalue())
+            self.assertIn("done", out.getvalue())
+        finally:
+            os.unlink(path)
+
 
 class TestConditionalExecution(unittest.TestCase):
     """&& and || short-circuit execution."""
