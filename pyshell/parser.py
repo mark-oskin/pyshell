@@ -7,6 +7,7 @@ and split_conditional / _split_pipeline for conditionals and pipelines.
 
 import ast
 import keyword
+import os
 
 
 def is_complete_python(source: str) -> bool:
@@ -64,6 +65,11 @@ def parse_line(line: str) -> tuple[str, str | list | list[list[str]]]:
         if len(segments) >= 2:
             return ("pipeline", [_split_command(seg) for seg in segments])
 
+    # Path-qualified commands (dir/script, ./tool, /bin/foo) must not parse as Python
+    # (e.g. ollama-test/agent --help → ollama - test / agent - -help).
+    if _looks_like_path_command(line):
+        return as_command()
+
     # Single identifier (e.g. ls, pwd) → command (or pipeline)
     if _is_single_identifier(line_stripped):
         return as_command()
@@ -80,6 +86,21 @@ def parse_line(line: str) -> tuple[str, str | list | list[list[str]]]:
     if _is_python(line_stripped):
         return ("python", line)
     return as_command()
+
+
+def _looks_like_path_command(line: str) -> bool:
+    """Return True when argv[0] is a filesystem path to a program."""
+    argv = _split_command(line)
+    if not argv:
+        return False
+    name = argv[0]
+    if name.startswith("~") or os.path.isabs(name):
+        return True
+    if os.path.sep in name:
+        return True
+    if os.path.altsep and os.path.altsep in name:
+        return True
+    return False
 
 
 def _is_single_identifier(line: str) -> bool:

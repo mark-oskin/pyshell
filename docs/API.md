@@ -91,7 +91,7 @@ Embedded `\n` from recalled history skips steps 1–3. Pipeline lines with unquo
 
 | Function | Description |
 |----------|-------------|
-| **parse_line(line)** → tuple | Classify line: ("python", source) or ("command", argv) or ("pipeline", list of argv). |
+| **parse_line(line)** → tuple | Classify line: ("python", source) or ("command", argv) or ("pipeline", list of argv). Path-qualified argv[0] (``dir/script``) is always a command. |
 | **is_complete_python(source)** → bool | True if source is syntactically complete Python (module mode). |
 | **python_block_continuation_needed(source)** → bool | True when source is a compound header (e.g. `for`/`while`/`if`) still missing its body. |
 | **_is_single_identifier(line)** → bool | True if line is exactly one identifier. |

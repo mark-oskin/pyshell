@@ -48,6 +48,7 @@ pyshell is a command-line shell that accepts both **Python-like code** and **she
 ### 3.1 Python vs shell
 
 - Lines with unquoted `|` (pipeline) or unquoted redirect/`&` are treated as shell; the parser never runs them as Python.
+- Path-qualified argv[0] (contains ``/`` or ``\\``, absolute, or ``~``) is always a command — e.g. ``ollama-test/agent --help`` must not parse as Python subtraction/division.
 - Otherwise: if the line is a **single identifier** (e.g. `pwd`, `ls`) or multiple tokens starting with an identifier without `=` or `(`, it is treated as a command **unless** it is valid Python (including compound headers like `for i in range(3):` that await an indented body). Shell commands that parse as simple expressions (e.g. `ls -la`) stay commands.
 - If the line parses as valid Python (AST), or is a compound statement header still missing its body, it is run as Python; else it is run as a command. So `2 + 3` → Python, `ls -la` → command, `for i in range(3):` → Python with `...` continuation for the body.
 

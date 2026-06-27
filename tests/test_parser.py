@@ -53,6 +53,17 @@ class TestParseLine(unittest.TestCase):
         self.assertEqual(kind, "command")
         self.assertEqual(payload, ["ls", "-la"])
 
+    def test_path_qualified_command_not_python(self):
+        """dir/script must run as a shell command, not Python binops."""
+        kind, payload = parse_line("ollama-test/agent --help")
+        self.assertEqual(kind, "command")
+        self.assertEqual(payload, ["ollama-test/agent", "--help"])
+
+    def test_single_path_token_is_command(self):
+        kind, payload = parse_line("bin/tool")
+        self.assertEqual(kind, "command")
+        self.assertEqual(payload, ["bin/tool"])
+
     def test_empty_returns_python(self):
         kind, payload = parse_line("")
         self.assertEqual(kind, "python")
